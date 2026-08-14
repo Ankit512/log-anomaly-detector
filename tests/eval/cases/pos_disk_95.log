@@ -1,0 +1,2 @@
+2026-08-13T04:00:00Z INFO  server-01 healthcheck ok
+2026-08-13T04:00:30Z WARN  server-01 disk usage at 95% on /var

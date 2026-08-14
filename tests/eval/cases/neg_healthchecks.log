@@ -1,0 +1,12 @@
+2026-08-13T07:00:00Z INFO  server-01 healthcheck ok
+2026-08-13T07:00:10Z INFO  server-02 healthcheck ok
+2026-08-13T07:00:20Z INFO  server-01 request GET /api/status 200 9ms
+2026-08-13T07:00:30Z INFO  server-02 request GET /api/status 200 12ms
+2026-08-13T07:00:40Z INFO  server-01 healthcheck ok
+2026-08-13T07:00:50Z INFO  server-02 healthcheck ok
+2026-08-13T07:01:00Z INFO  server-01 request POST /api/orders 201 41ms
+2026-08-13T07:01:10Z INFO  server-02 healthcheck ok
+2026-08-13T07:01:20Z INFO  server-01 healthcheck ok
+2026-08-13T07:01:30Z INFO  server-02 request GET /api/items 200 15ms
+2026-08-13T07:01:40Z INFO  server-01 healthcheck ok
+2026-08-13T07:01:50Z INFO  server-02 healthcheck ok

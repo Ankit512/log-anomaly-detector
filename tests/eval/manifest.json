@@ -1,0 +1,135 @@
+{
+  "_comment": [
+    "Labeled evaluation corpus. Ground truth is exact because the attacks are injected.",
+    "Each expected finding is (type, severity, entity). Entity is the IP for auth/network",
+    "rules, the host for resource rules, and null for rules that name no principal.",
+    "Severities are the CURRENT documented behaviour of the deterministic detector; a",
+    "deliberate severity change must update this file in the same commit."
+  ],
+  "cases": [
+    {
+      "id": "P1",
+      "file": "cases/pos_bruteforce_high.log",
+      "description": "6 auth failures from one IP inside 60s (canonical, WARN level)",
+      "expected": [
+        {"type": "auth_bruteforce", "severity": "high", "entity": "198.51.100.10"}
+      ]
+    },
+    {
+      "id": "P2",
+      "file": "cases/pos_bruteforce_compromise.log",
+      "description": "6 failures then a SUCCESS 20s later from the same IP = compromise",
+      "expected": [
+        {"type": "auth_bruteforce_success", "severity": "critical", "entity": "198.51.100.11"}
+      ]
+    },
+    {
+      "id": "P3",
+      "file": "cases/pos_suspicious_port.log",
+      "description": "outbound connection to C2-associated port 4444 (blocked)",
+      "expected": [
+        {"type": "suspicious_outbound", "severity": "high", "entity": "203.0.113.77"}
+      ]
+    },
+    {
+      "id": "P4",
+      "file": "cases/pos_disk_95.log",
+      "description": "disk at 95% (>= DISK_CRIT_PCT)",
+      "expected": [
+        {"type": "disk_pressure", "severity": "high", "entity": "server-01"}
+      ]
+    },
+    {
+      "id": "P5",
+      "file": "cases/pos_disk_85.log",
+      "description": "disk at 85% (>= DISK_WARN_PCT, < DISK_CRIT_PCT)",
+      "expected": [
+        {"type": "disk_pressure", "severity": "medium", "entity": "server-01"}
+      ]
+    },
+    {
+      "id": "P6",
+      "file": "cases/pos_error_burst.log",
+      "description": "6 non-auth ERROR lines inside 25s; isolates the error-burst rule",
+      "expected": [
+        {"type": "error_rate_spike", "severity": "medium", "entity": null}
+      ]
+    },
+    {
+      "id": "P7",
+      "file": "cases/pos_break_in.log",
+      "description": "3 sshd POSSIBLE BREAK-IN warnings from one IP (rfc3164 path only)",
+      "expected": [
+        {"type": "possible_break_in", "severity": "medium", "entity": "203.0.113.90"}
+      ]
+    },
+
+    {
+      "id": "N1",
+      "file": "cases/neg_four_failures.log",
+      "description": "4 failures — one below BRUTE_FORCE_MIN_FAILURES",
+      "expected": []
+    },
+    {
+      "id": "N2",
+      "file": "cases/neg_slow_trickle.log",
+      "description": "6 failures spread over 6 hours: reportable, but must never rate high",
+      "expected": [
+        {"type": "auth_bruteforce", "severity": "medium", "entity": "198.51.100.31"}
+      ],
+      "assertions": [
+        {"kind": "severity_ceiling", "type": "auth_bruteforce", "max": "medium"}
+      ]
+    },
+    {
+      "id": "N3",
+      "file": "cases/neg_healthchecks.log",
+      "description": "12 benign INFO healthcheck/200-OK lines",
+      "expected": []
+    },
+    {
+      "id": "N4",
+      "file": "cases/neg_single_failure.log",
+      "description": "one failed login followed by a legitimate success",
+      "expected": []
+    },
+    {
+      "id": "N5",
+      "file": "cases/neg_disk_78.log",
+      "description": "disk at 78% — below DISK_WARN_PCT",
+      "expected": []
+    },
+    {
+      "id": "N6",
+      "file": "cases/neg_rfc3164_auth_no_spike.log",
+      "description": "6 sshd failures in 60s: brute-force only, no error spike (locks the WARN mapping)",
+      "expected": [
+        {"type": "auth_bruteforce", "severity": "high", "entity": "203.0.113.91"}
+      ],
+      "assertions": [
+        {"kind": "absent_type", "type": "error_rate_spike"}
+      ]
+    },
+
+    {
+      "id": "F1",
+      "file": "cases/fmt_bruteforce_canonical.log",
+      "description": "6 attempts written in canonical phrasing (1 line each)",
+      "expected": [
+        {"type": "auth_bruteforce", "severity": "high", "entity": "198.51.100.20"}
+      ]
+    },
+    {
+      "id": "F2",
+      "file": "cases/fmt_bruteforce_rfc3164.log",
+      "description": "the SAME 6 attempts as real sshd: 6 Failed-password + 6 paired PAM lines",
+      "expected": [
+        {"type": "auth_bruteforce", "severity": "high", "entity": "198.51.100.20"}
+      ],
+      "assertions": [
+        {"kind": "same_findings_as", "case": "F1"},
+        {"kind": "auth_event_count", "expected": 6}
+      ]
+    }
+  ]
+}

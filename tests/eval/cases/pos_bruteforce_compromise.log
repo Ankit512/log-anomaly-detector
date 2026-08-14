@@ -1,0 +1,7 @@
+2026-08-13T02:20:00Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:20:10Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:20:20Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:20:30Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:20:40Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:20:50Z WARN  server-01 auth failed for user 'admin' from 198.51.100.11 (invalid password)
+2026-08-13T02:21:10Z INFO  server-01 auth success for user 'admin' from 198.51.100.11

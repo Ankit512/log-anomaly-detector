@@ -1,0 +1,12 @@
+Dec 11 10:00:00 LabSZ sshd[31001]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:00 LabSZ sshd[31001]: Failed password for admin from 198.51.100.20 port 52001 ssh2
+Dec 11 10:00:10 LabSZ sshd[31002]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:10 LabSZ sshd[31002]: Failed password for admin from 198.51.100.20 port 52002 ssh2
+Dec 11 10:00:20 LabSZ sshd[31003]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:20 LabSZ sshd[31003]: Failed password for admin from 198.51.100.20 port 52003 ssh2
+Dec 11 10:00:30 LabSZ sshd[31004]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:30 LabSZ sshd[31004]: Failed password for admin from 198.51.100.20 port 52004 ssh2
+Dec 11 10:00:40 LabSZ sshd[31005]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:40 LabSZ sshd[31005]: Failed password for admin from 198.51.100.20 port 52005 ssh2
+Dec 11 10:00:50 LabSZ sshd[31006]: pam_unix(sshd:auth): authentication failure; logname= uid=0 euid=0 tty=ssh ruser= rhost=198.51.100.20 user=admin
+Dec 11 10:00:50 LabSZ sshd[31006]: Failed password for admin from 198.51.100.20 port 52006 ssh2
