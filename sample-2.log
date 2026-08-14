@@ -1,0 +1,19 @@
+2026-08-13T02:14:01Z INFO  server-01 healthcheck ok
+2026-08-13T02:14:05Z INFO  server-01 request GET /api/status 200 12ms
+2026-08-13T02:15:02Z WARN  server-01 disk usage at 78% on /var/log
+2026-08-13T02:16:11Z INFO  server-02 healthcheck ok
+2026-08-13T02:16:44Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:45Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:46Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:47Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:48Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:49Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:50Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44 (invalid password)
+2026-08-13T02:16:52Z INFO  server-01 auth success for user 'admin' from 203.0.113.44
+2026-08-13T02:17:00Z INFO  server-02 request POST /api/orders 201 45ms
+2026-08-13T02:18:30Z CRIT  server-03 database connection pool exhausted (0/50 available)
+2026-08-13T02:18:31Z CRIT  server-03 database connection pool exhausted (0/50 available)
+2026-08-13T02:18:45Z ERROR server-03 request GET /api/orders 503 timeout
+2026-08-13T02:19:00Z INFO  server-01 healthcheck ok
+2026-08-13T02:19:10Z WARN  firewall-01 outbound connection blocked to 45.153.160.2:4444 from server-02
+2026-08-13T02:20:00Z INFO  server-02 healthcheck ok
