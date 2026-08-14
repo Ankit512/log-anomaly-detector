@@ -46,6 +46,15 @@ python3 tests/eval/run_eval.py
 
 Run either script with `--help` for the full flag list.
 
+## Threat-intel enrichment (optional, Stage C prototype)
+
+An opt-in downstream step in [`threat_intel/`](threat_intel/) matches the analyzer's
+flagged IPs against threat-intel indicators and resolves each to a MITRE ATT&CK technique
+(e.g. a blocked outbound to a known C2 IP → "T1071 — Command and Control"). It runs
+*after* the analyzer, reading its report; the core pipeline is untouched. Offline mode
+(a local STIX bundle) is the default and needs no extra packages. See
+[`threat_intel/README.md`](threat_intel/README.md).
+
 ## Design constraints
 
 Data stays local · no model training · read-only (no automated actions) · rules are

@@ -41,7 +41,7 @@ MacBook Air M4, 16GB RAM. Target a 7B–8B model at Q4/Q5. Do not attempt 70B lo
 |-------|-------------|--------|
 | **A** | Log triage on a local open-source model | ✅ Done |
 | **B** | Anomaly detection (deterministic + LLM), real-format support, eval harness | ✅ Done & regression-guarded |
-| **C** | Ops platform (live input, MCP tools, RCA, gated remediation) | ⬜ Not started |
+| **C** | Ops platform (live input, MCP tools, RCA, gated remediation) | 🟡 T9 threat-intel enrichment prototype landed; rest not started |
 
 **What works today:** the full detect-and-explain loop runs locally on real RFC 3164
 syslog (sshd/PAM) and the original canonical format. Deterministic rules own severity and
@@ -100,6 +100,7 @@ Feature commits, in order:
 | `867bcb6` | T4 | Username-spray enrichment: findings report distinct-username count at merge time (derived in the analyzer, detector untouched). |
 | `21c96f0` | T4 | Variant A auth dedupe in `rules_syslog.dedupe_auth_attempts()`: one event per real attempt (OpenSSH 1122→524 events); entities carry true attempt counts; FP anchors all preserved. |
 | `cc86b93` | T6 | Labeled eval corpus (`tests/eval/`) + `run_eval.py` scoring harness. 15/15 pass; mutation-tested to prove it can fail; non-zero exit = CI-ready. |
+| `9d92674` | T9 (Stage C) | Threat-intel enrichment prototype in `threat_intel/` (branch `stage-c-threat-intel`). Matches the analyzer's flagged IPs against STIX/TAXII indicators → MITRE ATT&CK techniques. Offline-first (stdlib-only), downstream of the analyzer, core untouched. Import guard + `export_iocs.py` + demo + network-free smoke test. |
 
 **Detector integrity:** current `anomaly_detector.py` sha256 `43f0560f…8312d05` (after the
 one sliding-window edit). Pristine import `d1b2ae80…b96d936` in `archive/`.
@@ -118,6 +119,7 @@ one sliding-window edit). Pristine import `d1b2ae80…b96d936` in `archive/`.
 | `archive/` | `anomaly_detector_original.py` (pristine reference), `log_analyzer.py.anthropic.bak`. |
 | `samples/` | Real LogHub datasets: `Linux_2k.log`, `OpenSSH_2k.log`. |
 | `sample-2.log` | 19-line synthetic baseline (canonical format, 3 planted issues). |
+| `threat_intel/` | Stage C (T9) prototype: `threat_detector.py` (match IOCs→MITRE ATT&CK), `taxii_client.py` (STIX/TAXII, import-guarded), `mitre_attack.py` (ATT&CK mapper), `export_iocs.py` (report.json→IOC list), `demo_threat_intel.json`, `test_threat_intel.py`, `requirements-taxii.txt` (live-mode deps only), `README.md`. Offline mode is stdlib-only. |
 | `.env.example`, `.gitignore`, `README.md` | Setup. Copy `.env.example` → `.env`; local Ollama needs no real key. |
 
 ### How to run
@@ -181,8 +183,12 @@ python3 tests/eval/run_eval.py   # 15/15 expected; non-zero exit on any failure
 **Stage C (only once there's a real environment / need)**
 - **T7 Live input** — tailed file / stream / SIEM API pull for continuous operation.
 - **T8 Analyst feedback loop** — capture true/false-positive marks; refine rules + few-shot.
-- **T9 Read-only MCP enrichment** — CMDB asset criticality, IP/domain reputation,
-  past-incident history. (Note: sends IPs outbound — opt-in, respects data-sovereignty.)
+- **T9 Read-only enrichment** — threat-intel matching + MITRE ATT&CK prototype is IN
+  (`threat_intel/`, offline-first). Remaining: fix `severity_for()` (flattens every match
+  to CRITICAL); wire live TAXII **and** replace its `--taxii-password` with certificate/token
+  auth before enabling it (current CLI-password path violates the security principle); add
+  CMDB asset-criticality and past-incident-history sources; tighten the permissive `DOMAIN_RE`;
+  make the ATT&CK cache auto-refresh. Offline stays the default (no log egress).
 - **T10 RCA + incident records** — correlate findings into root-cause narratives.
 - **T11 Gated remediation (last)** — human-approved actions above a severity threshold, with
   a mandatory verify step; certificate/token via the API/security gateway, never
