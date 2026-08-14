@@ -111,6 +111,13 @@ RETRY_NUDGE = (
     "no prose, no markdown fences."
 )
 
+SCHEMA_NUDGE = (
+    "\n\nYour previous reply was valid JSON but had the WRONG SHAPE. It must be a JSON "
+    'object whose top-level keys are exactly "explanations" (array), "findings" (array) '
+    'and "chunk_summary" (string). Do not invent other top-level keys such as "log" or '
+    '"events". Put every issue you found inside the "findings" array.'
+)
+
 
 def chunk_log_file(path: Path, lines_per_chunk: int = 100):
     """Yield chunks of the log file as lists of lines."""
@@ -180,6 +187,40 @@ def strip_fences(text):
     return text.replace("```json", "").replace("```", "").strip()
 
 
+def validate_response(obj):
+    """Does the reply have the SHAPE the system prompt asked for?
+
+    response_format=json_object guarantees only that the reply *parses*. Small models
+    routinely return well-formed JSON of the wrong shape (e.g. {"log": [...]}), which
+    a parseability-only check accepts and .get("findings", []) then silently reads as
+    "no findings" — a false all-clear on a log full of real events.
+
+    Drift also happens one level down: a correct "findings" list whose items use the
+    model's own keys ("finding"/"description" instead of "summary"). Those render as
+    empty placeholders and slip past restatement dedupe, so items are checked too.
+    An empty findings list stays valid — "nothing beyond the pre-flagged anomalies"
+    is a legitimate answer.
+    """
+    if not isinstance(obj, dict) or not isinstance(obj.get("findings"), list):
+        return False
+    return all(_valid_finding(f) for f in obj["findings"])
+
+
+def _valid_finding(f):
+    return isinstance(f, dict) and isinstance(f.get("summary"), str) and bool(f["summary"].strip())
+
+
+def describe_schema_failure(obj):
+    """Say which layer drifted, so the report's evidence is actually diagnostic."""
+    if not isinstance(obj, dict):
+        return f"reply was a JSON {type(obj).__name__}, not an object"
+    if not isinstance(obj.get("findings"), list):
+        return f"no 'findings' array; top-level keys: {list(obj.keys())}"
+    bad = [sorted(f.keys()) if isinstance(f, dict) else type(f).__name__
+           for f in obj["findings"] if not _valid_finding(f)]
+    return f"{len(bad)} findings[] item(s) lack a usable 'summary'; item keys: {bad[:2]}"
+
+
 def analyze_chunk(base_url, api_key, model, chunk_lines, chunk_index, ctx):
     """Send one chunk to the model and parse the structured response.
 
@@ -207,11 +248,21 @@ def analyze_chunk(base_url, api_key, model, chunk_lines, chunk_index, ctx):
                 "chunk_summary": "API error on this chunk",
             }
 
+        parsed = None
+        problem = None
         try:
             parsed = json.loads(raw_text)
-            break
         except json.JSONDecodeError:
-            if attempt == 2:
+            problem = "unparseable"
+        else:
+            if not validate_response(parsed):
+                problem = "off-schema"
+
+        if problem is None:
+            break
+
+        if attempt == 2:
+            if problem == "unparseable":
                 return {
                     "findings": [{
                         "severity": "low",
@@ -223,9 +274,29 @@ def analyze_chunk(base_url, api_key, model, chunk_lines, chunk_index, ctx):
                     }],
                     "chunk_summary": "Parsing error on this chunk",
                 }
-            print(f"    chunk {chunk_index + 1}: unparseable JSON, retrying once...")
-            # Same helper as the first attempt — the retry keeps the pre-flagged context.
-            user_prompt = build_user_prompt(log_text, ctx, suffix=RETRY_NUDGE)
+            # Off-schema twice: fail LOUDLY. An empty findings list here would be a
+            # false all-clear for a chunk that was never actually analyzed.
+            return {
+                "findings": [{
+                    "severity": "HIGH",
+                    "category": "analyzer_error",
+                    "summary": "Model returned off-schema response; chunk not analyzed",
+                    "evidence": describe_schema_failure(parsed),
+                    "recommended_action": (
+                        "This chunk was NOT analyzed by the model — treat it as unreviewed. "
+                        "Retry with a smaller --lines-per-chunk or a larger model."
+                    ),
+                    "confidence": "high",
+                    "rule_id": "analyzer_error",
+                    "source": "analyzer",
+                }],
+                "chunk_summary": "Off-schema response on this chunk",
+            }
+
+        nudge = RETRY_NUDGE if problem == "unparseable" else SCHEMA_NUDGE
+        print(f"    chunk {chunk_index + 1}: {problem} response, retrying once...")
+        # Same helper as the first attempt — the retry keeps the pre-flagged context.
+        user_prompt = build_user_prompt(log_text, ctx, suffix=nudge)
 
     parsed["chunk_index"] = chunk_index
     return parsed
@@ -360,6 +431,13 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
                 explanations[rid] = ex["explanation"]
 
         for finding in result.get("findings", []):
+            # Analyzer-generated findings (e.g. off-schema failures) are ours, not the
+            # model's: never deduped away, never relabelled.
+            if finding.get("source") == "analyzer":
+                finding["chunk_index"] = idx
+                finding["approx_line_start"] = start_line
+                llm_findings.append(finding)
+                continue
             if restates_detector(finding, anomalies):
                 print(f"    dropped LLM finding (restates a pre-flagged anomaly): {finding.get('summary', '')[:60]}")
                 continue
@@ -367,6 +445,9 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
             finding["approx_line_start"] = start_line
             finding["rule_id"] = None
             finding["source"] = "llm"       # set here, never trusted from the model
+            # The model sometimes omits fields even in a shape-valid findings list.
+            finding.setdefault("severity", "info")
+            finding.setdefault("summary", "(model omitted a summary for this finding)")
             llm_findings.append(finding)
         chunk_summaries.append(result.get("chunk_summary", ""))
 
@@ -439,7 +520,7 @@ def write_markdown_report(report: dict, path: str):
 
     def render(f):
         occ = f.get("occurrences", 1)
-        title = f"### [{str(f['severity']).upper()}] {f['summary']}"
+        title = f"### [{str(f.get('severity', 'info')).upper()}] {f.get('summary', '(no summary)')}"
         lines.append(title + (f" _(x{occ})_" if occ > 1 else ""))
         if f.get("rule_id"):
             lines.append(f"- **Rule:** `{f['rule_id']}`")
@@ -462,7 +543,7 @@ def write_markdown_report(report: dict, path: str):
     for f in detector:
         render(f)
 
-    lines.append("## Additional findings from the model\n")
+    lines.append("## Additional findings (model + analyzer)\n")
     if not llm:
         lines.append("None — the model surfaced nothing beyond the pre-flagged anomalies.\n")
     for f in llm:

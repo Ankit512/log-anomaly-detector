@@ -45,12 +45,23 @@ PROC_RE = re.compile(r"^(?P<proc>[^\s\[:]+)(?:\[(?P<pid>\d+)\])?:\s*(?P<msg>.*)$
 MONTHS = {m: i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
 
-# Syslog carries no level field. Infer one from content, most severe first.
+# Syslog carries no level field. Infer one from content, most severe first — the
+# FIRST pattern to match wins, so ordering encodes precedence.
 # Levels are restricted to the vocabulary anomaly_detector.LINE_RE already knows.
+#
+# Auth failures are deliberately WARN, not ERROR. They are already the input to the
+# brute-force rule; counting them as ERROR too makes every password-guessing burst
+# ALSO trip error_rate_spike, so one attack gets reported twice under two types.
+# Genuine service errors below stay ERROR/CRIT and still drive legitimate spikes.
+AUTH_FAILURE_HINT = re.compile(
+    r"(failed password|authentication failure|invalid user|failed none|failed publickey|"
+    r"break-in|failed to authenticate)", re.I)
+
 LEVEL_HINTS = [
     (re.compile(r"\b(kernel panic|fatal|segfault|out of memory|oom-killer)\b", re.I), "CRIT"),
-    (re.compile(r"(failed password|authentication failure|invalid user|break-in|"
-                r"\berror\b|\bdenied\b|\brefused\b|\bfailure\b|\bfailed\b)", re.I), "ERROR"),
+    (AUTH_FAILURE_HINT, "WARN"),
+    (re.compile(r"(\berror\b|\bdenied\b|\brefused\b|\bfailure\b|\bfailed\b|"
+                r"\btimeout\b|\bexhausted\b|\bunavailable\b)", re.I), "ERROR"),
     (re.compile(r"\b(warn|warning|deprecated|retry|retrying)\b", re.I), "WARN"),
 ]
 
