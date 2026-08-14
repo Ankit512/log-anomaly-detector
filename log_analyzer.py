@@ -450,6 +450,13 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         print(f"Vocabulary: translated {counts['auth_fail']} auth-failure and "
               f"{counts['auth_ok']} auth-success message(s) into rule vocabulary")
         extra_anomalies = rules_syslog.detect_extra(records)
+        # Collapse sshd's multiple lines per attempt so failure counts are real
+        # attempts, not log lines. Runs AFTER detect_extra so break-in warnings,
+        # which are counted per line, are unaffected.
+        records, dropped = rules_syslog.dedupe_auth_attempts(records)
+        if dropped:
+            print(f"Dedupe: collapsed {dropped} companion line(s); "
+                  f"{counts['auth_fail'] - dropped} auth event(s) = real attempts")
 
     raw_anomalies = detect(records) + extra_anomalies
     # Derived from the same record stream v1 just consumed — v1 itself is untouched.

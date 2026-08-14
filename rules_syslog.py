@@ -46,23 +46,33 @@ CANON_OK = "auth success for user '{user}' from {ip}"
 def canonical_form(msg):
     """Translate one real message into v1's phrasing.
 
-    Returns (canonical_msg, kind) where kind is "auth_fail", "auth_ok" or None.
+    Returns (canonical_msg, kind, source, ip) where kind is "auth_fail", "auth_ok"
+    or None, and source names the exact sshd phrasing that matched — which the
+    dedupe pass needs to tell an attempt's anchor line from its companions.
     Returns the message unchanged when no rule applies.
     """
-    m = FAILED_PASSWORD.search(msg) or INVALID_USER.search(msg)
+    m = FAILED_PASSWORD.search(msg)
     if m:
-        return CANON_FAIL.format(user=m.group("user"), ip=m.group("ip")), "auth_fail"
+        return (CANON_FAIL.format(user=m.group("user"), ip=m.group("ip")),
+                "auth_fail", "failed_password", m.group("ip"))
+
+    m = INVALID_USER.search(msg)
+    if m:
+        return (CANON_FAIL.format(user=m.group("user"), ip=m.group("ip")),
+                "auth_fail", "invalid_user", m.group("ip"))
 
     m = PAM_FAILURE.search(msg)
     if m:
         user = m.group("user") or "unknown"
-        return CANON_FAIL.format(user=user, ip=m.group("ip")), "auth_fail"
+        return (CANON_FAIL.format(user=user, ip=m.group("ip")),
+                "auth_fail", "pam_failure", m.group("ip"))
 
     m = ACCEPTED_PASSWORD.search(msg)
     if m:
-        return CANON_OK.format(user=m.group("user"), ip=m.group("ip")), "auth_ok"
+        return (CANON_OK.format(user=m.group("user"), ip=m.group("ip")),
+                "auth_ok", "accepted_password", m.group("ip"))
 
-    return msg, None
+    return msg, None, None, None
 
 
 def canonicalize(records):
@@ -74,16 +84,58 @@ def canonicalize(records):
     out = []
     counts = {"auth_fail": 0, "auth_ok": 0, "untouched": 0}
     for r in records:
-        canon, kind = canonical_form(r["msg"])
+        canon, kind, source, ip = canonical_form(r["msg"])
         copy = dict(r)
         if kind:
             copy["msg"] = canon
             copy["original_msg"] = r["msg"]
+            copy["auth_source"] = source
+            copy["auth_ip"] = ip
             counts[kind] += 1
         else:
             counts["untouched"] += 1
         out.append(copy)
     return out, counts
+
+
+# Companion lines sshd emits for an attempt that also produced a Failed password.
+COMPANION_SOURCES = ("invalid_user", "pam_failure")
+
+
+def dedupe_auth_attempts(records):
+    """Variant A: collapse sshd's multiple lines per attempt down to one event.
+
+    sshd logs one line per protocol event, not per attempt: an "Invalid user" line,
+    a pam_unix "authentication failure" line, and a "Failed password" line can all
+    describe a single guess. Counting all three inflates failure counts ~2x and
+    pushes IPs over the brute-force threshold on attempts they never made.
+
+    The rule is structural, not time-based. Every attempt that reached password
+    verification is anchored by exactly one "Failed password" line, and all lines of
+    one connection share a pid. So for a given (ip, pid):
+
+      - keep EVERY Failed-password line — never merge two of them, so a connection
+        that retried 5 times still counts as 5 attempts;
+      - drop the Invalid-user and PAM lines, which are that same attempt announcing
+        itself earlier in the connection;
+      - if a connection has NO Failed-password line, keep its lines untouched —
+        nothing would be left to represent it otherwise.
+
+    Formats without Failed-password lines at all (e.g. bare PAM syslog) are
+    unaffected by construction. Returns (records, dropped_count).
+    """
+    anchored = {(r.get("auth_ip"), r.get("pid")) for r in records
+                if r.get("auth_source") == "failed_password"}
+
+    kept = []
+    dropped = 0
+    for r in records:
+        if (r.get("auth_source") in COMPANION_SOURCES
+                and (r.get("auth_ip"), r.get("pid")) in anchored):
+            dropped += 1
+            continue
+        kept.append(r)
+    return kept, dropped
 
 
 def detect_break_in_attempts(records):
