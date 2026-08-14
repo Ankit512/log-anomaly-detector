@@ -1,3 +1,4 @@
+# ARCHIVED: original Anthropic-API version. Superseded by endpoint-agnostic log_analyzer.py.
 #!/usr/bin/env python3
 """
 log_analyzer.py — Phase 1: AI-powered log analysis (read-only, no auto-actions)
