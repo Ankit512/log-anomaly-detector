@@ -1,3 +1,6 @@
+# ARCHIVED PRISTINE REFERENCE — validated original anomaly_detector.py
+# sha256: d1b2ae801fbc554915b74ca0bd3a67d953e8fb6b44ab6303c6e83a785b96d936
+# Preserved before T4 edited the working copy. Do not modify.
 #!/usr/bin/env python3
 """
 anomaly_detector.py — Phase 2: deterministic + statistical anomaly detection.
@@ -111,17 +114,9 @@ def detect_auth_bruteforce(records):
     for ip, events in fails.items():
         if len(events) < BRUTE_FORCE_MIN_FAILURES:
             continue
-        times = sorted(t for t in (r["ts"] for r, _ in events) if t)
-        # Sliding window: intensity is the densest burst, not the total spread.
-        # Using max-min spread inverted the severity — a sustained attack scored
-        # LOWER than a short one purely for lasting longer.
-        peak = 0
-        i = 0
-        for j in range(len(times)):
-            while (times[j] - times[i]).total_seconds() > BRUTE_FORCE_WINDOW_SEC:
-                i += 1
-            peak = max(peak, j - i + 1)
-        within = (not times) or peak >= BRUTE_FORCE_MIN_FAILURES
+        times = [r["ts"] for r, _ in events if r["ts"]]
+        span = (max(times) - min(times)).total_seconds() if len(times) >= 2 else 0
+        within = (not times) or span <= BRUTE_FORCE_WINDOW_SEC
         user = events[0][1]
         first_line, last_line = events[0][0]["n"], events[-1][0]["n"]
         ev = f"{len(events)}x auth failed for '{user}' from {ip} (lines {first_line}-{last_line})"
@@ -150,8 +145,7 @@ def detect_auth_bruteforce(records):
                 f"Brute-force login attempts for '{user}' from {ip}",
                 ev,
                 f"{len(events)} failures (>= {BRUTE_FORCE_MIN_FAILURES}) from one source"
-                + (f", peaking at {peak} within a {BRUTE_FORCE_WINDOW_SEC}s window" if times else "")
-                + " indicates a brute-force attempt.",
+                + (f" within {int(span)}s" if times else "") + " indicates a brute-force attempt.",
                 {"ip": ip, "user": user, "failures": len(events)},
             ))
     return out
