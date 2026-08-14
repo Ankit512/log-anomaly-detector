@@ -92,7 +92,7 @@ Feature commits, in order:
 
 | Commit | Milestone | What shipped |
 |--------|-----------|--------------|
-| `fe696d8` | T1 | Endpoint-agnostic analyzer: OpenAI-compatible `/v1/chat/completions`, env config (`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`), deterministic default (`LLM_TEMPERATURE=0`), configurable `LLM_CHUNK_SIZE`. Ollama local by default; Anthropic original archived. |
+| `fe696d8` | T1 | Endpoint-agnostic analyzer: OpenAI-compatible `/v1/chat/completions`, env config (`LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL`), deterministic default (`LLM_TEMPERATURE=0`), configurable chunk size (`--lines-per-chunk` CLI flag, default 100). Ollama local by default; Anthropic original archived. |
 | `ef3ddf1` | T3 | Detector→analyzer integration. Detector runs in-process before the LLM; anomalies authoritative; retry-safe context via a shared `build_user_prompt` (closes the retry-path blind spot); in-analyzer dedupe; timestamp-based restatement matcher. 5/5 validation. |
 | `05bf5b7` | T5 | Real syslog: `normalize.py` (RFC 3164 envelope, year inference w/ Dec→Jan rollover, proc/pid) + `rules_syslog.py` (sshd/PAM vocabulary → frozen regexes; POSSIBLE BREAK-IN sibling rule). Reuses `detect()` over the record dict; detector byte-identical; `raw` preserved. |
 | `1585b1a` | T5a | Schema-drift fix: `validate_response()` checks top-level **and** item-level shape, retries on mismatch, emits a loud `analyzer_error` instead of a silent all-clear. Markdown-writer crash hardened. Auth-failure level → WARN to cut error-rate-spike noise. |
@@ -134,9 +134,9 @@ python3 tests/eval/run_eval.py   # 15/15 expected; non-zero exit on any failure
 ```
 
 ### Configuration
-- **Env (`.env`):** `LLM_BASE_URL` (default `http://localhost:11434/v1`), `LLM_API_KEY`
-  (`ollama`), `LLM_MODEL` (`llama3.1:8b`), `LLM_TEMPERATURE` (default `0`), `LLM_CHUNK_SIZE`
-  (default `100`).
+- **Env (`.env`, 4 keys):** `LLM_BASE_URL` (default `http://localhost:11434/v1`),
+  `LLM_API_KEY` (`ollama`), `LLM_MODEL` (`llama3.1:8b`), `LLM_TEMPERATURE` (default `0`).
+- **Chunk size:** CLI flag `--lines-per-chunk` (default 100) on `log_analyzer.py` — not an env var.
 - **Detector constants:** `BRUTE_FORCE_MIN_FAILURES` (5), `BRUTE_FORCE_WINDOW_SEC` (120),
   `COMPROMISE_SUCCESS_WINDOW_SEC` (120), `ERROR_BURST_MIN` (5), `ERROR_BURST_WINDOW_SEC` (60),
   `DISK_WARN_PCT` (80), `DISK_CRIT_PCT` (90), `SUSPICIOUS_PORTS`.
@@ -156,7 +156,7 @@ python3 tests/eval/run_eval.py   # 15/15 expected; non-zero exit on any failure
   deduped — intentional bias toward under-deduping over suppressing real attempts.
 - **Small-model drift.** `llama3.1:8b` abandons the JSON schema on dense 100-line chunks. It
   now **fails loudly** (`analyzer_error`), not silently. Mitigate with a smaller
-  `LLM_CHUNK_SIZE` or a larger model.
+  `--lines-per-chunk` or a larger model.
 - **LLM explanation coverage.** The model occasionally skips a `rule_id` (renders `n/a`).
   Optional fix: a second pass for missing ids.
 - **Eval baseline caveat.** 15/15 / precision 1.000 means "unchanged vs known behaviour," not
