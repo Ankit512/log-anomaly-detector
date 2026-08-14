@@ -43,9 +43,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # Deterministic pre-pass. Imported in-process (not shelled out) so anomalies stay
-# as dicts. anomaly_detector.py is the validated original and is never modified.
+# as dicts. anomaly_detector.py is the validated original and is never modified;
+# normalize.py handles the envelope and rules_syslog.py the vocabulary, so v1's
+# correlation can run over formats its own regexes were never written for.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from anomaly_detector import detect, parse_lines, to_llm_context  # noqa: E402
+import normalize  # noqa: E402
+import rules_syslog  # noqa: E402
+from anomaly_detector import detect, to_llm_context  # noqa: E402
 
 
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:11434/v1")
@@ -317,7 +321,21 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         sys.exit(1)
 
     # --- Deterministic pre-pass: rules run over the WHOLE file before any LLM call ---
-    raw_anomalies = detect(parse_lines(path))
+    records, stats = normalize.load(path)
+    print(f"Format: {stats['format']} — {stats['parsed']}/{stats['total_lines']} line(s) parsed"
+          + (f", {stats['unparsed']} unparsed" if stats["unparsed"] else ""))
+    if stats["unparsed"]:
+        for raw in stats["unparsed_examples"][:3]:
+            print(f"    unparsed: {raw[:88]}")
+
+    extra_anomalies = []
+    if stats["format"] == "rfc3164":
+        records, counts = rules_syslog.canonicalize(records)
+        print(f"Vocabulary: translated {counts['auth_fail']} auth-failure and "
+              f"{counts['auth_ok']} auth-success message(s) into rule vocabulary")
+        extra_anomalies = rules_syslog.detect_extra(records)
+
+    raw_anomalies = detect(records) + extra_anomalies
     anomalies = dedupe_anomalies(raw_anomalies)
     collapsed = len(raw_anomalies) - len(anomalies)
     print(f"Detector: {len(anomalies)} anomaly(ies)"
