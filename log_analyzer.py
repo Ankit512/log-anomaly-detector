@@ -335,6 +335,51 @@ def detector_to_findings(anomalies):
 
 TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:]+(?:Z|[+-]\d{2}:\d{2})?")
 
+# v1's canonical auth-failure phrasing, read back out of the record stream.
+CANON_AUTH_FAIL_RE = re.compile(r"auth failed for user '(?P<user>[^']*)' from (?P<ip>\S+)")
+
+SPRAY_MIN_USERS = 2          # below this it isn't a spray, it's one target
+SPRAY_NAMES_SHOWN = 4
+
+
+def usernames_by_ip(records):
+    """Distinct usernames each IP attempted, in first-seen order.
+
+    v1's brute-force finding names only the first username it saw, which is
+    accurate but misleading when an attacker sprays many accounts. The record
+    stream already holds every attempt, so the full picture is derivable here
+    without touching the detector.
+    """
+    seen = {}
+    for r in records:
+        m = CANON_AUTH_FAIL_RE.search(r.get("msg", ""))
+        if not m:
+            continue
+        user = m.group("user")
+        bucket = seen.setdefault(m.group("ip"), [])
+        if user not in bucket:
+            bucket.append(user)
+    return seen
+
+
+def enrich_username_spray(anomalies, records):
+    """Add distinct-username context to brute-force findings. Mutates copies only."""
+    users = usernames_by_ip(records)
+    for a in anomalies:
+        if a.get("type") not in ("auth_bruteforce", "auth_bruteforce_success"):
+            continue
+        ip = a.get("entities", {}).get("ip")
+        attempted = users.get(ip, [])
+        a.setdefault("entities", {})["distinct_usernames"] = len(attempted)
+        a["entities"]["usernames_sample"] = attempted[:SPRAY_NAMES_SHOWN]
+        if len(attempted) < SPRAY_MIN_USERS:
+            continue
+        shown = ", ".join(attempted[:SPRAY_NAMES_SHOWN])
+        more = f", +{len(attempted) - SPRAY_NAMES_SHOWN} more" if len(attempted) > SPRAY_NAMES_SHOWN else ""
+        a["summary"] = (f"{a['summary']} — {len(attempted)} distinct usernames sprayed "
+                        f"({shown}{more})")
+    return anomalies
+
 
 def restates_detector(finding, anomalies):
     """Best-effort: does this LLM finding just restate a pre-flagged anomaly?
@@ -407,6 +452,8 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         extra_anomalies = rules_syslog.detect_extra(records)
 
     raw_anomalies = detect(records) + extra_anomalies
+    # Derived from the same record stream v1 just consumed — v1 itself is untouched.
+    raw_anomalies = enrich_username_spray(raw_anomalies, records)
     anomalies = dedupe_anomalies(raw_anomalies)
     collapsed = len(raw_anomalies) - len(anomalies)
     print(f"Detector: {len(anomalies)} anomaly(ies)"
