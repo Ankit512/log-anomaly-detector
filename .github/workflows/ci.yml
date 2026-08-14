@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  tests:
+    name: Eval corpus + threat-intel smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      # No `pip install` step, deliberately. Both suites are Python-stdlib only.
+      # The live-TAXII extras in threat_intel/requirements-taxii.txt are NOT
+      # installed here: threat_intel/taxii_client.py guards that import, so the
+      # offline path must keep working without them — and CI proves it does.
+
+      - name: Deterministic detector eval corpus
+        # 15 labeled cases; no model involved. The LLM spot-check is opt-in
+        # behind --llm (not passed here), so this makes no network calls.
+        run: python3 tests/eval/run_eval.py
+
+      - name: Threat-intel smoke test
+        # IOC matching against the local STIX bundle. MITRE technique resolution
+        # is skipped automatically on a cold ~/.cache/mitre_attack — CI never
+        # downloads the 46MB ATT&CK bundle.
+        run: python3 threat_intel/test_threat_intel.py
