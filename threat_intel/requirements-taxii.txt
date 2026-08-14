@@ -1,0 +1,11 @@
+# LIVE TAXII MODE ONLY — not needed for normal use.
+#
+# The offline path (--stix-bundle) and the IOC exporter are Python-stdlib only,
+# matching the rest of this project. Install these ONLY if you intend to pull
+# indicators from a live TAXII 2.x server, which sends your observed IOCs to a
+# third party — a data-sovereignty decision, not a default.
+#
+#   pip install -r threat_intel/requirements-taxii.txt
+
+taxii2client>=2.3.0
+stix2>=3.0.1
