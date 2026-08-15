@@ -162,7 +162,8 @@ check("evidence highlight applied", h.includes("ev-hit"));
 check("predicate rendered", h.includes("failures_from(ip)"));
 check("timeline rendered", h.includes("First failed login"));
 check("under-rated pill matches the data", h.includes("<b>2</b>"));
-check("LLM-surfaced row labelled below-threshold", h.includes("below threshold"));
+check("LLM-surfaced row credits the model, no blank dash",
+      h.includes("model surfaced this") && h.includes("no rule fired"));
 // NOTE: `occurrences` is carried in the state but the console does not render it
 // today, so a finding the dedupe collapsed reads as one event. Not asserted here
 // because the test must describe the console as it is, not as it should be.
@@ -229,7 +230,49 @@ errd.analyzerErrors = 1;
 check("partial banner shown for an unanalyzed chunk",
       run(errd).html.includes("This run is partial"));
 
-console.log("\n9. HONEST STATE — zero findings is All clear:");
+console.log("\n9. severity ramp — monotonic, and no green anywhere:");
+/* Green reads as "safe". A severity scale that drifts toward it mis-signals at a
+   glance, whatever the label says — so the ramp is asserted by hue, not by eye. */
+const hueOf = (hex) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+  if (!d) return null;
+  let h = mx === r ? ((g - b) / d) % 6 : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  h *= 60; return h < 0 ? h + 360 : h;
+};
+const RAMP = { CRITICAL: "#e2807f", HIGH: "#d8a35e", MEDIUM: "#dcb64a",
+               LOW: "#9397ab", INFO: "#75798c" };
+for (const [name, hex] of Object.entries(RAMP)) {
+  const hue = hueOf(hex);
+  const green = hue !== null && hue > 50 && hue < 170;
+  check(`${name} is not green (hue ${hue === null ? "n/a" : hue.toFixed(0)}°)`, !green, hex);
+}
+check("MEDIUM is gold, not the old lime #c9c07a", !js.includes("c9c07a"));
+check("warm steps descend in alarm: CRITICAL < HIGH < MEDIUM hue",
+      hueOf(RAMP.CRITICAL) < hueOf(RAMP.HIGH) && hueOf(RAMP.HIGH) < hueOf(RAMP.MEDIUM));
+h = run(LIVE).html;
+check("MEDIUM colour is actually applied in the render",
+      h.includes("#dcb64a") || js.includes("#dcb64a"));
+
+console.log("\n10. sovereignty copy is present tense in BOTH places:");
+h = run(LIVE).html;
+check("header states the standing guarantee", h.includes("0 bytes leave this machine"));
+check("footer matches the header exactly",
+      (h.match(/0 bytes leave this machine/g) || []).length === 2,
+      (h.match(/0 bytes leave this machine/g) || []).length + " occurrence(s)");
+check("no past-tense 'left the machine' anywhere", !h.includes("left the machine"));
+
+console.log("\n11. LLM-surfaced framing is positive, never a blank or a failure:");
+h = run(LIVE, 'state.selId="l0";').html;
+check("outcome credits the model", h.includes("Model surfaced this"));
+check("explains the below-threshold catch", h.includes("below every rule threshold"));
+check("shows the model's own severity, not an empty dash",
+      /Model severity[\s\S]{0,220}>LOW</.test(h));
+check("no 'shown as context only' dismissal", !h.includes("Shown as context only"));
+check("rule card says no rule fired rather than a bare em-dash",
+      h.includes("no rule fired") && h.includes("Nothing in the ruleset matched"));
+
+console.log("\n12. HONEST STATE — zero findings is All clear:");
 const clear = clone(LIVE);
 clear.findings = [];
 h = run(clear).html;

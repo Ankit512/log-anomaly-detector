@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 import normalize  # noqa: E402
 
 SEV_COLOR = {
-    "CRITICAL": "#e2807f", "HIGH": "#d8a35e", "MEDIUM": "#c9c07a",
+    "CRITICAL": "#e2807f", "HIGH": "#d8a35e", "MEDIUM": "#dcb64a",
     "LOW": "#9397ab", "INFO": "#75798c",
 }
 LINE_RANGE_RE = re.compile(r"lines (\d+)-(\d+)")
