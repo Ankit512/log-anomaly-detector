@@ -1,0 +1,292 @@
+#!/usr/bin/env python3
+"""
+test_console.py — headless render smoke test for the anomaly console.
+
+The console is the only part of this project that isn't Python, and it is the
+part a reviewer actually looks at. This runs its real render path against a
+stubbed DOM and asserts what ends up on the page: every run state, the filters,
+selection and marking, and — most importantly — the honest states, because those
+are the ones that would quietly lie if they broke.
+
+No browser, no network, no model, no report on disk: the live state is a small
+literal below. The console's own JS is extracted from the HTML and executed as-is,
+so this tests the shipped file rather than a copy.
+
+Node is required to execute JavaScript. If it is absent the suite reports SKIPPED
+and exits 0 rather than failing a machine that simply has no JS runtime — the same
+posture test_threat_intel.py takes with a cold ATT&CK cache.
+
+Usage:
+  python3 console/test_console.py
+"""
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+CONSOLE_HTML = HERE / "anomaly_console.html"
+
+# A live state in console/adapter.py's shape. Hand-written so the test needs no
+# analyzer run: two rule findings that disagree with the model, one that agrees,
+# and one below every threshold.
+LIVE_STATE = {
+    "live": True,
+    "runId": "bench-2026-08-15",
+    "runWindow": "02:16–02:19 UTC",
+    "runHosts": "server-01, server-03",
+    "runParsed": "19 lines parsed · 0 unparsed",
+    "generatedAt": "2026-08-15T02:20:00+00:00",
+    "manifest": {
+        "input_sha256": "7e8b3dfd9c3293ca166bb2fe8aedda86fe0e4fcb32ee906ad5b238add4648049",
+        "detector_sha256": "43f0560f2a81d52a9b8909d4c0f3a537ef2059b343ea48acc7dba59b38312d05",
+        "model": "llama3.1:8b", "temperature": 0, "ruleset": "v1",
+    },
+    "compareRun": True, "underratedCount": 2,
+    "chunksUsable": 1, "chunksTotal": 1, "degraded": False, "analyzerErrors": 0,
+    "findings": [
+        {
+            "id": "d0", "sev": "CRITICAL", "sevColor": "#e2807f", "ruleSev": "CRITICAL",
+            "llmSev": "HIGH", "llmWhy": "Saw the failures but not the success.",
+            "delta": "under-rated", "prov": "RULE-CAUGHT",
+            "type": "auth_bruteforce_success", "host": "server-01", "hostDerived": True,
+            "time": "02:16:52", "stamp": "2026-08-13T02:16:52+00:00",
+            "title": "Brute-force then SUCCESSFUL login for 'admin' from 203.0.113.44",
+            "ruleWhy": "Failures then a success from the same source.",
+            "explanation": "Treat the admin account as compromised.",
+            "predicate": "failures_from(ip) >= 5\n-> severity = critical",
+            "ruleRef": "anomaly_detector.py · detect_auth_bruteforce()",
+            "occurrences": 1, "linesNote": None,
+            "chips": [{"text": "203.0.113.44"}],
+            "lines": [{"n": 5, "a": "2026-08-13T02:16:44Z ERROR server-01 auth failed from ",
+                       "hit": "203.0.113.44", "b": "", "crit": True}],
+            "timeline": [{"t": "02:16:44", "label": "First failed login", "dot": "#e2807f"}],
+        },
+        {
+            "id": "d1", "sev": "HIGH", "sevColor": "#d8a35e", "ruleSev": "HIGH",
+            "llmSev": "LOW", "llmWhy": "Read 'blocked' as resolved.",
+            "delta": "under-rated", "prov": "RULE-CAUGHT",
+            "type": "suspicious_outbound", "host": "firewall-01", "hostDerived": True,
+            "time": "02:19:10", "stamp": "2026-08-13T02:19:10+00:00",
+            "title": "Outbound connection to 45.153.160.2:4444 (blocked)",
+            "ruleWhy": "Port 4444 is a known C2 port.", "explanation": "Investigate server-02.",
+            "predicate": "dest_port in SUSPICIOUS_PORTS", "ruleRef": "detect_suspicious_ports()",
+            "occurrences": 1, "linesNote": None, "chips": [],
+            "lines": [{"n": 18, "a": "blocked outbound ", "hit": "45.153.160.2:4444",
+                       "b": "", "crit": False}],
+            "timeline": [{"t": "02:19:10", "label": "Connection dropped", "dot": "#d8a35e"}],
+        },
+        {
+            "id": "d2", "sev": "CRITICAL", "sevColor": "#e2807f", "ruleSev": "CRITICAL",
+            "llmSev": "CRITICAL", "llmWhy": "Agrees.", "delta": "agree", "prov": "RULE-CAUGHT",
+            "type": "critical_service_event", "host": "server-03", "hostDerived": True,
+            "time": "02:18:30", "stamp": "2026-08-13T02:18:30+00:00",
+            "title": "Database connection pool exhausted on server-03",
+            "ruleWhy": "CRIT plus an exhaustion keyword.", "explanation": "Check the pool.",
+            "predicate": "level == CRIT", "ruleRef": "detect_critical_and_resource()",
+            "occurrences": 2, "linesNote": None, "chips": [],
+            "lines": [{"n": 14, "a": "pool exhausted", "hit": "", "b": "", "crit": True}],
+            "timeline": [{"t": "02:18:30", "label": "Pool hits its ceiling", "dot": "#e2807f"}],
+        },
+        {
+            "id": "l0", "sev": "LOW", "sevColor": "#9397ab", "ruleSev": "— below threshold",
+            "llmSev": None, "llmWhy": None, "delta": "note-only", "prov": "LLM-SURFACED",
+            "type": "disk", "host": "—", "hostDerived": False, "time": "", "stamp": "",
+            "title": "Disk at 78% on /var/log — below the 80% threshold",
+            "ruleWhy": "", "explanation": "Watch log growth.", "predicate": "",
+            "ruleRef": "", "occurrences": 1,
+            "linesNote": "this rule records a summary, not a line excerpt",
+            "chips": [{"text": "no rule fired"}],
+            "lines": [{"n": "", "a": "disk usage at 78%", "hit": "", "b": "", "crit": False}],
+            "timeline": [],
+        },
+    ],
+}
+
+HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const js = fs.readFileSync(process.argv[2], "utf8");
+const LIVE = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+
+let fails = 0;
+const check = (label, cond, detail) => {
+  if (!cond) fails++;
+  console.log(`  [${cond ? "PASS" : "FAIL"}] ${label}${!cond && detail ? " — " + detail : ""}`);
+};
+
+/* Runs the console's real render path against a stubbed DOM.
+   `pre` lets a case set console state (e.g. open the manifest) before boot. */
+function run(consoleData, pre) {
+  let html = "";
+  const listeners = {};
+  const src = pre ? js.replace("boot();", pre + " boot();") : js;
+  const ctx = {
+    document: {
+      getElementById: () => ({ set innerHTML(v) { html = v; }, get innerHTML() { return html; } }),
+      addEventListener: (t, fn) => { listeners[t] = fn; },
+      activeElement: { tagName: "BODY" },
+    },
+    window: { print: () => {} }, navigator: {},
+    fetch: () => Promise.reject(new Error("no server")),   // file:// behaviour
+    console,
+  };
+  if (consoleData) ctx.window.CONSOLE_DATA = consoleData;
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  return { html, listeners, ctx };
+}
+const rows = (h) => (h.match(/class="row"/g) || []).length;
+const clone = (o) => JSON.parse(JSON.stringify(o));
+
+console.log("1. fixture fallback (no data, fetch fails — the file must still open):");
+let { html: h, listeners } = run(null);
+check("renders", h.length > 3000, h.length + " chars");
+check("demo run-state switcher present", h.includes('name="runview"'));
+check("click/change/keydown handlers bound",
+      ["click", "change", "keydown"].every((k) => typeof listeners[k] === "function"));
+
+console.log("\n2. live data — the run reads from the report, not the fixture:");
+h = run(LIVE).html;
+check("live run id rendered", h.includes("bench-2026-08-15"));
+check("run-state switcher HIDDEN (state is derived, not chosen)", !h.includes('name="runview"'));
+check("all 4 findings render", rows(h) === 4, rows(h) + " rows");
+check("rule severity shown", h.includes("CRITICAL"));
+check("under-rated delta shown", h.includes("under-rated by LLM"));
+check("derived host shown", h.includes("server-01"));
+check("evidence line text rendered", h.includes("auth failed from"));
+check("evidence highlight applied", h.includes("ev-hit"));
+check("predicate rendered", h.includes("failures_from(ip)"));
+check("timeline rendered", h.includes("First failed login"));
+check("under-rated pill matches the data", h.includes("<b>2</b>"));
+check("LLM-surfaced row labelled below-threshold", h.includes("below threshold"));
+// NOTE: `occurrences` is carried in the state but the console does not render it
+// today, so a finding the dedupe collapsed reads as one event. Not asserted here
+// because the test must describe the console as it is, not as it should be.
+
+// When a rule records a summary rather than a line excerpt, the evidence header
+// must say so instead of claiming the text is verbatim from the log.
+h = run(LIVE, 'state.selId="l0";').html;
+check("linesNote replaces the 'verbatim from the source log' claim",
+      h.includes("not a line excerpt") && !h.includes("verbatim from the source log"));
+
+console.log("\n3. filters:");
+const F = (name) => run(LIVE, `state.filter=${JSON.stringify(name)};`).html;
+check("All -> 4 rows", rows(F("all")) === 4, rows(F("all")) + "");
+check("Rule != LLM -> 2 rows", rows(F("dis")) === 2, rows(F("dis")) + "");
+check("LLM-surfaced -> 1 row", rows(F("llm")) === 1, rows(F("llm")) + "");
+check("Unreviewed -> 4 rows", rows(F("open")) === 4, rows(F("open")) + "");
+
+console.log("\n4. selection, marking, bulk:");
+h = run(LIVE, 'state.selId="d1";').html;
+check("detail follows selection", h.includes("45.153.160.2:4444"));
+h = run(LIVE, 'state.marks={d0:"tp"};').html;
+check("true-positive mark rendered", h.includes("Marked true positive"));
+h = run(LIVE, 'state.marks={d0:"fp"};').html;
+check("false-positive mark rendered", h.includes("Dismissed false positive"));
+h = run(LIVE, 'state.marks={d0:"tp"}; state.filter="open";').html;
+check("Unreviewed filter excludes a marked finding", rows(h) === 3, rows(h) + "");
+h = run(LIVE, 'state.checked=["d0","d1"];').html;
+check("bulk bar shows the selection count", h.includes("2 selected"));
+
+console.log("\n5. manifest is integrity, never a signature:");
+h = run(LIVE, "state.manifest=true;").html;
+check("real input hash shown", h.includes(LIVE.manifest.input_sha256.slice(0, 16)));
+check("real detector hash shown", h.includes(LIVE.manifest.detector_sha256.slice(0, 16)));
+check("NO 'signature valid' claim", !h.includes("signature valid"));
+check("NO 'signed' field", !/<k>signed<\/k>/.test(h));
+check("states hashes are recomputable, not a signature", h.includes("not a signature"));
+
+console.log("\n6. HONEST STATE — compare not run is never a fake zero:");
+const noCmp = clone(LIVE);
+noCmp.compareRun = false; noCmp.underratedCount = null;
+noCmp.findings.forEach((f) => { f.llmSev = null; f.delta = null; });
+h = run(noCmp).html;
+// Header and row are asserted with DISTINCT strings: "compare not run" appears in
+// both, so a single substring check passes even if the header loses it entirely.
+check("header pill states compare was not run",
+      /pill[^>]*>[\s\S]{0,200}compare not run[\s\S]{0,120}rerun with/.test(h));
+check("no under-rated count pill", !/<b>\d+<\/b>\s*<span>findings a raw LLM/.test(h));
+check("row LLM column states compare not run",
+      /cmp-k">LLM alone<\/div>\s*<div class="cmp-v"[^>]*>compare not run/.test(h));
+check("detail card offers the --compare rerun", h.includes("--compare"));
+
+console.log("\n7. HONEST STATE — degraded chunks are Partial, not misses:");
+const deg = clone(LIVE);
+deg.degraded = true; deg.chunksUsable = 0; deg.chunksTotal = 4;
+deg.findings[0].delta = "unknown"; deg.findings[0].llmSev = "UNKNOWN";
+h = run(deg).html;
+check("partial banner shown", h.includes("This run is partial"));
+check("explains UNKNOWN is not a miss", h.includes("not the same as missing them"));
+check("row shows the model gave no usable answer", h.includes("model gave no usable answer"));
+
+console.log("\n8. HONEST STATE — analyzer errors also mean Partial:");
+const errd = clone(LIVE);
+errd.analyzerErrors = 1;
+check("partial banner shown for an unanalyzed chunk",
+      run(errd).html.includes("This run is partial"));
+
+console.log("\n9. HONEST STATE — zero findings is All clear:");
+const clear = clone(LIVE);
+clear.findings = [];
+h = run(clear).html;
+check("all-clear empty state", h.includes("All clear — 0 anomalies"));
+check("detail pane empty state", h.includes("No finding to review"));
+check("no 'signed manifest' language", !h.includes("signed manifest"));
+
+console.log(`\n${fails ? "FAILED — " + fails + " check(s)" : "PASSED — all checks green"}`);
+process.exit(fails ? 1 : 0);
+"""
+
+
+def extract_js(html_path):
+    src = html_path.read_text()
+    m = re.search(r"<script>\n(.*?)\n</script>", src, re.S)
+    if not m:
+        print("ERROR: could not find the console's <script> block")
+        sys.exit(1)
+    return m.group(1)
+
+
+def main():
+    node = shutil.which("node")
+    if not node:
+        print("console render smoke test")
+        print("  [SKIP] node not found — the console is JavaScript and needs a JS runtime.")
+        print("         Install Node, or run this on a machine that has it, to exercise the console.")
+        return 0
+
+    if not CONSOLE_HTML.exists():
+        print(f"ERROR: {CONSOLE_HTML} not found")
+        return 1
+
+    print(f"console render smoke test (headless, no browser/network) — node {node}\n")
+    with tempfile.TemporaryDirectory(prefix="console-test-") as tmp:
+        tmp = Path(tmp)
+        js_path = tmp / "console.js"
+        js_path.write_text(extract_js(CONSOLE_HTML))
+
+        syntax = subprocess.run([node, "--check", str(js_path)], capture_output=True, text=True)
+        if syntax.returncode != 0:
+            print("  [FAIL] the console's JavaScript does not parse")
+            print(syntax.stderr.strip()[:500])
+            return 1
+
+        state_path = tmp / "state.json"
+        state_path.write_text(json.dumps(LIVE_STATE))
+        harness = tmp / "harness.js"
+        harness.write_text(HARNESS)
+
+        result = subprocess.run([node, str(harness), str(js_path), str(state_path)],
+                                capture_output=True, text=True)
+        print(result.stdout.rstrip())
+        if result.stderr.strip():
+            print(result.stderr.strip()[:800])
+        return result.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

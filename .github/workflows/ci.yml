@@ -33,3 +33,10 @@ jobs:
         # is skipped automatically on a cold ~/.cache/mitre_attack — CI never
         # downloads the 46MB ATT&CK bundle.
         run: python3 threat_intel/test_threat_intel.py
+
+      - name: Console render smoke test
+        # Executes the console's own JS against a stubbed DOM: every run state,
+        # the filters, marking, and the honest compare-not-run / partial /
+        # all-clear states. No browser, no network, no model — ubuntu-latest
+        # ships Node, and the test skips loudly if a runner ever lacks it.
+        run: python3 console/test_console.py
