@@ -13,8 +13,9 @@ and [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) for the technical picture.
    ```bash
    python3 tests/eval/run_eval.py            # expect: 15/15, exit 0
    python3 threat_intel/test_threat_intel.py # expect: exit 0
+   python3 console/test_console.py           # console render smoke test, exit 0
    ```
-   CI runs both on every push and pull request. Don't push red.
+   CI runs all three on every push and pull request, headless (no network, no model). Don't push red.
 
 3. **The detector is effectively frozen.** `anomaly_detector.py` is the validated core; the
    pristine original is preserved in `archive/anomaly_detector_original.py`. Do **not** edit
@@ -37,6 +38,16 @@ and [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) for the technical picture.
 
 6. **Never commit secrets.** `.env` is gitignored — keep it that way. Only `.env.example`
    (placeholder values) is tracked. No keys, tokens, or passwords in code, config, or logs.
+
+7. **Honest surfaces.** This is an audit tool; the UI must never claim more than it can prove.
+   Show computed **integrity** hashes, never a "signature valid" badge for an unsigned run.
+   If `--compare` wasn't run, show "compare not run," never a fake "0 under-rated." Degraded
+   model chunks are `UNKNOWN`, never counted as a miss. The console and `report.json` stay
+   fully local — nothing phones home (a fonts CDN counts).
+
+8. **Additive layers.** The console (`console/`), compare mode (`compare.py`), rule context
+   (`rule_context.py`), and threat-intel (`threat_intel/`) are all *additive* — they read the
+   analyzer's output and never change authoritative, rule-owned severities. Keep it that way.
 
 ## Adding a new log format (the common task)
 

@@ -102,8 +102,13 @@ The work is planned in three phases. Two are complete:
   (running continuously, tracing root causes, and — only with human approval — helping fix
   problems) is planned.
 
+There is also now a **review screen you open in a browser**: one command turns a log into a
+tidy page of findings, ranked by seriousness, each with the exact evidence and a plain-English
+explanation — and it can show, side by side, what the AI *alone* would have said versus what
+the reliable rules concluded. It runs entirely on your own machine; nothing is uploaded.
+
 In short: the core — reliably spotting and explaining trouble in real logs — is built,
-tested, and documented.
+tested, documented, and now has a friendly screen to review it in.
 
 ## The bigger vision
 

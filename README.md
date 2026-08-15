@@ -46,6 +46,32 @@ python3 tests/eval/run_eval.py
 
 Run either script with `--help` for the full flag list.
 
+## Review console (the app interface)
+
+A self-contained, local web console for reviewing a run in the browser — findings ranked by
+severity, per-finding evidence, rule predicate + event timeline, and an integrity manifest.
+No build step, no framework, no network.
+
+```bash
+# one command: analyze a log and open the reviewed run at http://127.0.0.1:8765/
+python3 console/serve.py --input samples/OpenSSH_2k.log
+
+# add --compare to also show what the LLM would have rated each finding on its own
+python3 console/serve.py --input sample-2.log --compare
+
+# review an existing report instead of re-analyzing
+python3 console/serve.py --report report.json
+```
+
+The console runs entirely on `localhost` and reads only local files — the persistent
+"processed locally · 0 bytes leave this machine" indicator is literally true.
+
+**Compare mode (`--compare`, opt-in).** Runs a second, *unprimed* LLM pass — the same model
+on the same logs but with the deterministic rules removed — to record what the model would
+have rated each finding on its own. The console then shows the contrast (RULE verdict vs LLM
+alone) and counts how many findings the model under-rated. It is off by default (it doubles
+inference) and never alters the authoritative, rule-owned severities.
+
 ## Threat-intel enrichment (optional, Stage C prototype)
 
 An opt-in downstream step in [`threat_intel/`](threat_intel/) matches the analyzer's
@@ -65,5 +91,7 @@ frozen, with new formats added as sibling modules.
 
 See §5 of [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) for the full file inventory. Key pieces:
 `log_analyzer.py` (analyzer + LLM), `anomaly_detector.py` (validated detector),
-`normalize.py` (syslog envelope), `rules_syslog.py` (vocabulary + dedupe), `tests/eval/`
-(labeled corpus + harness), `samples/` (real LogHub logs).
+`normalize.py` (syslog envelope), `rules_syslog.py` (vocabulary + dedupe),
+`rule_context.py` (rule predicate + event timeline for the UI/audit), `compare.py` (opt-in
+LLM-alone ablation), `console/` (serve.py + adapter + the review console), `threat_intel/`
+(threat-intel enrichment), `tests/eval/` (labeled corpus + harness), `samples/` (real LogHub logs).
