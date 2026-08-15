@@ -431,7 +431,7 @@ def preflight(base_url, api_key, model):
 
 
 def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
-        base_url: str, api_key: str):
+        base_url: str, api_key: str, compare: bool = False):
     preflight(base_url, api_key, model)
 
     path = Path(input_path)
@@ -517,6 +517,41 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         if f["rule_id"] in explanations:
             f["recommended_action"] = explanations[f["rule_id"]]
 
+    # --- Optional ablation: what would the model alone have said? ---------------
+    # Strictly additive. Runs a SECOND, unprimed pass over the same chunks and
+    # annotates the detector findings; it never touches their severities.
+    compare_stats = None
+    if compare:
+        import compare as compare_mod
+        print("Compare mode: second unprimed pass (no rules, no pre-flags)...")
+
+        def chat_fn(system, user):
+            return chat_completion(base_url, api_key, model, system, user)
+
+        llm_alone, statuses = compare_mod.run_llm_alone(
+            [c for _, c in all_chunks], chat_fn, model, LLM_TEMPERATURE, strip_fences)
+        ok = sum(1 for s in statuses if s in compare_mod.USABLE_STATUSES)
+        coverage_ok = ok == len(statuses)
+        print(f"  unprimed pass: {ok}/{len(statuses)} chunk(s) usable, "
+              f"{len(llm_alone)} finding(s)")
+        if not coverage_ok:
+            bad = [s for s in statuses if s not in compare_mod.USABLE_STATUSES]
+            print(f"  WARNING: {len(bad)} chunk(s) gave no usable answer ({', '.join(sorted(set(bad)))}).")
+            print("           Findings in those ranges are UNKNOWN, not 'missed' — the")
+            print("           comparison cannot speak for lines the model never rated.")
+
+        compare_mod.align(detector_findings, llm_alone, records, coverage_ok=coverage_ok)
+        compare_stats = {
+            "chunks_total": len(statuses),
+            "chunks_usable": ok,
+            "chunk_status": statuses,
+            "llm_alone_findings": len(llm_alone),
+            "underrated_count": compare_mod.underrated_count(detector_findings),
+            "prompt": compare_mod.PROMPT_VERSION,
+        }
+        print(f"  under-rated by the model alone: {compare_stats['underrated_count']}"
+              f"/{len(detector_findings)} rule finding(s)")
+
     # Sort each group by severity (critical first); detector findings lead the report.
     detector_findings.sort(key=severity_rank)
     llm_findings.sort(key=severity_rank)
@@ -537,6 +572,8 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "findings": all_findings,
         "chunk_summaries": chunk_summaries,
     }
+    if compare_stats:
+        report["compare"] = compare_stats
 
     json_path = f"{output_prefix}.json"
     with open(json_path, "w") as f:
@@ -620,6 +657,11 @@ if __name__ == "__main__":
     parser.add_argument("--lines-per-chunk", type=int, default=100, help="Lines per chunk sent to the model")
     parser.add_argument("--model", default=LLM_MODEL, help=f"Model to use (default: $LLM_MODEL or {LLM_MODEL})")
     parser.add_argument("--base-url", default=LLM_BASE_URL, help=f"OpenAI-compatible base URL (default: $LLM_BASE_URL or {LLM_BASE_URL})")
+    parser.add_argument("--compare", action="store_true",
+                        help="Also run an unprimed LLM-alone pass and record what the model "
+                             "would have rated each finding without the rules. Doubles "
+                             "inference cost; never changes an authoritative severity.")
     args = parser.parse_args()
 
-    run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY)
+    run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY,
+        compare=args.compare)

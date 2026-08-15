@@ -7,3 +7,6 @@ sample_report.*
 demo_report.*
 demo_iocs.txt
 demo_threat_report.*
+
+# compare-mode ablation cache (local inference results, machine-specific)
+.compare_cache.json
