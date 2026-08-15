@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Anomaly Console — itsoc</title>
+<style>
+/* ==========================================================================
+   Nocturne tokens — the subset this screen uses, copied from the design
+   system's styles.css. Values are verbatim; the ramps this console never
+   touches are omitted rather than restated.
+   ========================================================================== */
+:root{
+  --color-bg:#161826;
+  --color-surface:#232532;
+  --color-text:#e9e9ed;
+  --color-accent:#9184d9;
+  --color-divider:color-mix(in srgb,#e9e9ed 16%,transparent);
+
+  --color-neutral-200:#e4e7f5;
+  --color-neutral-400:#b2b6ca;
+  --color-neutral-500:#9397ab;
+  --color-neutral-600:#75798c;
+  --color-neutral-700:#595d6c;
+  --color-neutral-800:#3f424d;
+
+  --color-accent-300:#d2cefd;
+  --color-accent-400:#b5abfc;
+  --color-accent-500:#968ae0;
+  --color-accent-600:#796cbf;
+  --color-accent-900:#2b2741;
+
+  --font-heading:"Inter",system-ui,-apple-system,sans-serif;
+  --font-body:"Inter",system-ui,-apple-system,sans-serif;
+  --font-mono:ui-monospace,Menlo,Monaco,"Cascadia Code",monospace;
+
+  --space-1:2.8px; --space-2:5.6px; --space-3:8.4px;
+  --space-4:11.2px; --space-6:16.8px; --space-8:22.4px;
+
+  --radius-sm:4px; --radius-md:8px; --radius-lg:14px;
+  --shadow-sm:0 0 0 1px #3f424d;
+
+  /* Severity ramp — from the console's own logic block, not the DS ramps. */
+  --sev-critical:#e2807f;
+  --sev-high:#d8a35e;
+  --sev-medium:#c9c07a;
+  --sev-low:#9397ab;
+  --sev-none:#75798c;
+  --ok:#8ecf9a;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+body{
+  margin:0;background:var(--color-bg);color:var(--color-text);
+  font-family:var(--font-body);font-size:15px;line-height:1.55;font-weight:400;
+}
+h3,h5{font-family:var(--font-heading);font-weight:500;line-height:1.12;letter-spacing:-0.015em;margin:0}
+a{color:var(--color-accent);text-decoration:none}
+a:hover{color:var(--color-accent-400)}
+:focus{outline:none}
+:focus-visible{outline:2px solid var(--color-accent);outline-offset:2px}
+::selection{background:color-mix(in srgb,var(--color-accent) 30%,transparent)}
+@keyframes locpulse{0%,100%{opacity:.35}50%{opacity:1}}
+
+/* — buttons, verbatim from the design system — */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  cursor:pointer;text-decoration:none;
+  font-family:var(--font-heading);font-weight:500;font-size:14px;line-height:1.2;
+  color:var(--color-text);background:transparent;border:1px solid transparent;
+  padding:var(--space-2) calc(var(--space-3)*1.2);border-radius:var(--radius-md);
+}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn-primary{color:var(--color-accent);border-color:var(--color-accent)}
+.btn-primary:hover{background:color-mix(in srgb,var(--color-accent) 12%,transparent)}
+.btn-primary:active{background:color-mix(in srgb,var(--color-accent) 22%,transparent)}
+.btn-secondary{border-color:var(--color-divider)}
+.btn-secondary:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+.btn-secondary:active{background:color-mix(in srgb,var(--color-text) 14%,transparent)}
+
+/* — form controls — */
+.input{
+  width:100%;min-height:36px;padding:6px 10px;font:inherit;font-size:14px;
+  color:var(--color-text);caret-color:var(--color-accent);
+  background:var(--color-surface);
+  border:1px solid var(--color-divider);border-radius:var(--radius-md);
+}
+.input:hover{border-color:color-mix(in srgb,var(--color-text) 45%,transparent)}
+.input:focus-visible{border-color:var(--color-accent);outline-offset:0}
+.seg{display:inline-flex;overflow:hidden;border:1px solid var(--color-divider);border-radius:var(--radius-md)}
+.seg-opt{display:inline-flex;align-items:center;gap:6px;padding:7px 12px;font-size:13px;cursor:pointer}
+.seg-opt input{position:absolute;opacity:0;width:0;height:0;pointer-events:none}
+.seg-opt+.seg-opt{border-left:1px solid var(--color-divider)}
+.seg-opt:has(input:checked){color:var(--color-accent);box-shadow:inset 0 0 0 1px var(--color-accent)}
+.seg-opt:not(:has(input:checked)):hover{background:color-mix(in srgb,var(--color-text) 7%,transparent)}
+.seg-opt:has(input:focus-visible){outline:2px solid var(--color-accent);outline-offset:-2px}
+
+/* ==========================================================================
+   Console layout
+   ========================================================================== */
+.app{height:100vh;min-height:820px;display:flex;flex-direction:column;overflow:hidden}
+
+.hdr{display:flex;align-items:center;gap:var(--space-6);padding:var(--space-4) var(--space-6);flex:none}
+.brand{display:flex;align-items:baseline;gap:var(--space-3);margin-right:auto}
+.brand b{font-size:18px;font-weight:500;letter-spacing:-0.015em}
+.brand span{font-size:11px;color:var(--color-neutral-600)}
+.pill{display:flex;align-items:center;gap:var(--space-2);padding:4px 10px;border-radius:var(--radius-md)}
+.pill-accent{border:1px solid var(--color-accent);color:var(--color-accent)}
+.pill-accent b{font-size:13px;font-weight:500;font-variant-numeric:tabular-nums}
+.pill-accent span{font-size:11px;letter-spacing:.02em}
+.pill-local{gap:7px;border:1px solid rgba(233,233,237,.16)}
+.pill-local span{font-size:11px;color:var(--color-neutral-400)}
+.dot-live{width:7px;height:7px;border-radius:50%;background:var(--ok);animation:locpulse 2.4s ease-in-out infinite}
+
+/* Freestanding rules fade at both ends — the Nocturne signature, here as
+   top+bottom edges on the run bar. */
+.runbar{
+  display:flex;align-items:center;gap:var(--space-6);padding:var(--space-3) var(--space-6);flex:none;
+  background:
+    linear-gradient(to right,transparent,rgba(233,233,237,.16) 48px,rgba(233,233,237,.16) calc(100% - 48px),transparent) no-repeat bottom/100% 1px,
+    linear-gradient(to right,transparent,rgba(233,233,237,.16) 48px,rgba(233,233,237,.16) calc(100% - 48px),transparent) no-repeat top/100% 1px;
+}
+.runmeta{display:flex;align-items:center;gap:var(--space-4);font-size:12px;color:var(--color-neutral-400);font-variant-numeric:tabular-nums}
+.runmeta b{color:var(--color-text);font-weight:500}
+.sep{color:var(--color-neutral-700)}
+.runacts{display:flex;gap:var(--space-2);margin-left:auto}
+
+.manifest{
+  padding:var(--space-4) var(--space-6);background:#1c1f30;display:flex;gap:var(--space-8);
+  flex-wrap:wrap;font-size:11.5px;font-family:var(--font-mono);color:var(--color-neutral-400);
+  flex:none;box-shadow:inset 0 -1px 0 rgba(233,233,237,.10);
+}
+.manifest k{color:var(--color-neutral-600)}
+
+.warn{
+  display:flex;align-items:flex-start;gap:var(--space-4);margin:var(--space-4) var(--space-6) 0;
+  padding:var(--space-4);border:1px solid #7a6a3c;border-radius:var(--radius-md);
+  background:rgba(122,106,60,.14);flex:none;
+}
+.warn-bar{width:6px;align-self:stretch;border-radius:3px;background:#d8b45e;flex:none}
+.warn-t{font-size:13px;font-weight:500;margin-bottom:var(--space-1)}
+.warn-b{font-size:12px;color:var(--color-neutral-400);max-width:760px}
+
+.body{flex:1;display:flex;min-height:0}
+
+/* — left: finding list — */
+.list-pane{width:520px;flex:none;display:flex;flex-direction:column;min-height:0;box-shadow:inset -1px 0 0 rgba(233,233,237,.10)}
+.filters{display:flex;align-items:center;gap:var(--space-2);padding:var(--space-4) var(--space-6) var(--space-3);flex-wrap:wrap;flex:none}
+.chip{padding:4px 10px;border-radius:6px;cursor:pointer;font:inherit;font-size:11.5px}
+.hint{margin-left:auto;font-size:10.5px;font-family:var(--font-mono);color:var(--color-neutral-600)}
+.bulk{display:flex;align-items:center;gap:var(--space-3);margin:0 var(--space-6) var(--space-3);padding:7px var(--space-4);border-radius:var(--radius-md);background:var(--color-accent-900);flex:none}
+.bulk span{font-size:12px}
+.bulk div{display:flex;gap:var(--space-2);margin-left:auto}
+.rows{flex:1;overflow:auto;padding:0 var(--space-6) var(--space-6);display:flex;flex-direction:column;gap:var(--space-3)}
+
+.row{display:flex;gap:var(--space-4);padding:var(--space-4);border-radius:var(--radius-md);cursor:pointer}
+.row-rail{display:flex;flex-direction:column;align-items:center;gap:var(--space-3);flex:none;padding-top:2px}
+.row-rail input{width:14px;height:14px;accent-color:var(--color-accent-500);cursor:pointer}
+.row-sev{width:4px;flex:1;border-radius:2px}
+.row-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:var(--space-2)}
+.row-head{display:flex;align-items:center;gap:var(--space-3)}
+.sev-label{font-size:10px;letter-spacing:.1em;text-transform:uppercase;font-weight:500}
+.prov{font-size:10px;letter-spacing:.06em;text-transform:uppercase;padding:2px 7px;border-radius:5px}
+.stamp{margin-left:auto;font-size:11px;font-family:var(--font-mono);color:var(--color-neutral-600)}
+.row-title{font-size:13.5px;line-height:1.35;text-wrap:pretty}
+.row-meta{display:flex;align-items:center;gap:6px;font-size:11px;font-family:var(--font-mono);color:var(--color-neutral-500)}
+
+/* Rule-vs-model comparison strip — the heart of the screen. */
+.cmp{display:flex;align-items:stretch;margin-top:var(--space-1);border:1px solid rgba(233,233,237,.12);border-radius:6px;overflow:hidden}
+.cmp-cell{flex:1;padding:var(--space-2) var(--space-3)}
+.cmp-k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:2px}
+.cmp-v{font-size:12px}
+.cmp-div{width:1px;background:rgba(233,233,237,.12)}
+.cmp-delta{display:flex;align-items:center;padding:0 var(--space-3)}
+.cmp-delta span{font-size:10px;letter-spacing:.04em}
+
+.chips{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-top:var(--space-1)}
+.tagm{font-size:10.5px;padding:2px 8px;border-radius:5px;background:var(--color-neutral-800);color:var(--color-neutral-200);font-family:var(--font-mono)}
+
+.empty{margin-top:56px;text-align:center;padding:0 var(--space-8)}
+.empty-mark{width:44px;height:44px;margin:0 auto var(--space-6);border-radius:50%;border:1px solid var(--color-neutral-800);display:flex;align-items:center;justify-content:center;color:var(--ok);font-size:18px}
+.empty-t{font-size:17px;font-weight:500;margin-bottom:var(--space-2)}
+.empty-b{font-size:12.5px;color:var(--color-neutral-500);max-width:340px;margin:0 auto;text-wrap:pretty}
+
+/* — right: detail — */
+.detail-pane{flex:1;min-width:0;display:flex;flex-direction:column;min-height:0}
+.detail{flex:1;overflow:auto;padding:var(--space-6) var(--space-8) var(--space-8)}
+.d-head{display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)}
+.d-type{font-size:11px;font-family:var(--font-mono);color:var(--color-neutral-600)}
+.d-title{margin:0 0 var(--space-4);font-size:23px;max-width:820px;text-wrap:pretty}
+.verdicts{display:flex;gap:var(--space-4);flex-wrap:wrap;margin-bottom:var(--space-6)}
+.vcard{flex:1;min-width:220px;padding:var(--space-4);border-radius:var(--radius-md)}
+.vcard-k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)}
+.vcard-v{font-size:19px;margin-bottom:4px}
+.vcard-s{font-size:11.5px;color:var(--color-neutral-500)}
+.panel{padding:var(--space-4) 12px;border-radius:var(--radius-md);background:var(--color-surface);box-shadow:var(--shadow-sm)}
+.panel-k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);margin-bottom:var(--space-2)}
+.explain{margin-bottom:var(--space-6)}
+.explain .panel-k{color:var(--color-accent)}
+.explain p{margin:0;font-size:13.5px;line-height:1.6;color:var(--color-neutral-200);max-width:840px;text-wrap:pretty}
+
+.ev-head{display:flex;align-items:baseline;gap:var(--space-3);margin-bottom:var(--space-3)}
+.ev-head h5{font-size:14px}
+.ev-head span{font-size:11px;color:var(--color-neutral-600)}
+.ev{border-radius:var(--radius-md);overflow:hidden;background:#12141f;box-shadow:inset 0 0 0 1px rgba(233,233,237,.10);margin-bottom:var(--space-6)}
+.ev-row{display:flex;gap:var(--space-4);padding:var(--space-2) var(--space-4);font-family:var(--font-mono);font-size:11.5px;line-height:1.5}
+.ev-n{color:var(--color-neutral-700);flex:none;width:44px;text-align:right}
+.ev-t{color:var(--color-neutral-500);white-space:pre-wrap;word-break:break-word}
+.ev-hit{color:var(--color-bg);padding:0 3px;border-radius:3px}
+
+.split{display:flex;gap:var(--space-6);flex-wrap:wrap;margin-bottom:var(--space-6)}
+.split>.panel{flex:1;min-width:320px}
+.pred{font-family:var(--font-mono);font-size:12px;line-height:1.7;color:var(--color-accent-300);white-space:pre-wrap}
+.pred-ref{margin-top:var(--space-3);font-size:11px;color:var(--color-neutral-600);font-family:var(--font-mono)}
+.tl{display:flex;gap:var(--space-4);align-items:flex-start}
+.tl-t{font-family:var(--font-mono);font-size:11px;color:var(--color-neutral-500);flex:none;padding-top:2px}
+.tl-rail{width:9px;flex:none;display:flex;flex-direction:column;align-items:center;align-self:stretch}
+.tl-dot{width:7px;height:7px;border-radius:50%;margin-top:6px;flex:none}
+.tl-line{width:1px;flex:1;background:rgba(233,233,237,.14)}
+.tl-l{font-size:12.5px;padding-bottom:var(--space-3);color:var(--color-neutral-200);text-wrap:pretty}
+
+.mark-head{display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)}
+.mark-head .note{font-size:11px;color:var(--color-neutral-600)}
+.mark-head .status{margin-left:auto;font-size:11.5px}
+.mark-acts{display:flex;gap:var(--space-3);flex-wrap:wrap;align-items:center}
+.mark-acts .input{width:auto;min-width:230px}
+
+.nodetail{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-3);padding:var(--space-8);text-align:center}
+.nodetail-t{font-size:15px;color:var(--color-neutral-400)}
+.nodetail-b{font-size:12.5px;color:var(--color-neutral-600);max-width:420px;text-wrap:pretty}
+
+.ftr{display:flex;align-items:center;gap:var(--space-6);padding:var(--space-3) var(--space-6);flex:none;font-size:11px;font-family:var(--font-mono);color:var(--color-neutral-600);box-shadow:inset 0 1px 0 rgba(233,233,237,.10)}
+.ftr .local{display:flex;align-items:center;gap:6px;color:var(--color-neutral-400)}
+.ftr .local i{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block}
+.ftr .ro{margin-left:auto}
+</style>
+</head>
+<body>
+<div id="app" class="app"></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   Anomaly Console — a read-only review surface for one analyzer run.
+
+   The screen exists to make one thing visible: the deterministic rules own
+   severity, and the local model only explains. Every finding shows the rule's
+   verdict beside what the model alone would have said, so an under-rating is
+   a fact on the page rather than a claim in a README.
+
+   Vanilla JS on purpose. The design prototype was React-backed; this project
+   is stdlib-only with no build step, and a review console that needs npm to
+   open would not survive contact with the repo.
+   ========================================================================== */
+
+const SEV = {
+  CRITICAL: "#e2807f", HIGH: "#d8a35e", MEDIUM: "#c9c07a", LOW: "#9397ab", NONE: "#75798c"
+};
+
+/* Fixture data, carried over from the design. Section 6 of the README notes
+   what a real report.json does and does not yet supply for these fields. */
+const FINDINGS = [
+  {
+    id: "f1", sev: "CRITICAL", ruleSev: "CRITICAL", llmSev: "MEDIUM", prov: "RULE-CAUGHT",
+    type: "auth_bruteforce_success", host: "server-01", time: "02:16:52",
+    stamp: "2026-08-13T02:16:52Z · server-01",
+    title: "Brute-force then successful login for 'admin' from 203.0.113.44 — likely account compromise",
+    ruleWhy: "Correlation rule fired across 8 lines.",
+    llmWhy: "Read the success line in isolation; did not link it to the preceding failures.",
+    explanation: "Seven password failures for the admin account arrived from a single external address in six seconds, and eight seconds after the last one the same address logged in successfully. That pattern is a credential-guessing attack that worked. Treat the admin account on server-01 as compromised from 02:16:52 onward and review everything that session did.",
+    predicate: "failures_from(ip) >= 5\n  AND peak_within(120s) >= 5\n  AND auth_success(same ip) <= 120s after last failure\n→ severity = CRITICAL",
+    ruleRef: "anomaly_detector.py · detect_auth_bruteforce()",
+    chips: [],
+    lines: [
+      { n: 842, a: "2026-08-13T02:16:44Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 843, a: "2026-08-13T02:16:45Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 844, a: "2026-08-13T02:16:46Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 845, a: "2026-08-13T02:16:47Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 846, a: "2026-08-13T02:16:48Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 847, a: "2026-08-13T02:16:49Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 848, a: "2026-08-13T02:16:50Z WARN server-01 ", hit: "auth failed for user 'admin' from 203.0.113.44", b: "" },
+      { n: 851, a: "2026-08-13T02:16:52Z INFO server-01 ", hit: "auth success for user 'admin' from 203.0.113.44", b: "", crit: true }
+    ],
+    timeline: [
+      { t: "02:16:44", label: "First failed password for 'admin' from 203.0.113.44", dot: "#d8a35e" },
+      { t: "02:16:50", label: "Seventh failure — brute-force threshold (5 / 120s) crossed", dot: "#d8a35e" },
+      { t: "02:16:52", label: "Successful login, same source, 2s after the last failure", dot: "#e2807f" }
+    ]
+  },
+  {
+    id: "f2", sev: "CRITICAL", ruleSev: "CRITICAL", llmSev: "MEDIUM", prov: "RULE-CAUGHT",
+    type: "critical_service_event", host: "server-03", time: "02:18:31",
+    stamp: "2026-08-13T02:18:31Z · server-03",
+    title: "Database connection pool exhausted on server-03, followed by a 503 timeout on /api/orders",
+    ruleWhy: "CRIT level plus an exhaustion keyword escalates to critical.",
+    llmWhy: "Described it as a transient capacity warning.",
+    explanation: "server-03 ran out of database connections at 02:18:30 with 37 requests still waiting, and one second later the orders API returned a 503. Customer-facing order traffic was failing during this window. The pool ceiling of 100 was reached, so this is saturation rather than a single slow query.",
+    predicate: "level == CRIT\n  AND msg contains ('exhaust' | 'pool' | 'down')\n→ severity = CRITICAL",
+    ruleRef: "anomaly_detector.py · detect_critical_and_resource()",
+    chips: [],
+    lines: [
+      { n: 1188, a: "2026-08-13T02:18:30Z CRIT server-03 ", hit: "db connection pool exhausted (max=100, waiting=37)", b: "", crit: true },
+      { n: 1191, a: "2026-08-13T02:18:31Z ERROR server-03 ", hit: "503 upstream timeout on /api/orders", b: "" }
+    ],
+    timeline: [
+      { t: "02:18:30", label: "Connection pool hits its 100-connection ceiling, 37 waiting", dot: "#e2807f" },
+      { t: "02:18:31", label: "503 upstream timeout returned on /api/orders", dot: "#e2807f" }
+    ]
+  },
+  {
+    id: "f3", sev: "HIGH", ruleSev: "HIGH", llmSev: "LOW", prov: "RULE-CAUGHT",
+    type: "suspicious_outbound", host: "server-02", time: "02:19:10",
+    stamp: "2026-08-13T02:19:10Z · firewall-01",
+    title: "Outbound connection from server-02 to 45.153.160.2:4444 — blocked by firewall-01",
+    ruleWhy: "Port 4444 is on the known C2 / reverse-shell list; blocked traffic is still flagged.",
+    llmWhy: "Saw the word 'blocked' and treated the event as resolved.",
+    explanation: "server-02 tried to open a connection to an external address on port 4444, the default Metasploit reverse-shell port, and the firewall stopped it. The block prevented the channel, but something on server-02 initiated the attempt — the host should be investigated for an implant regardless of the block.",
+    predicate: "dest_port in SUSPICIOUS_PORTS\n  # 4444 → Metasploit / reverse-shell C2\n→ severity = HIGH  (blocked == true does not downgrade)",
+    ruleRef: "anomaly_detector.py · detect_suspicious_ports()",
+    chips: [{ text: "known C2 · T1071" }, { text: "45.153.160.2" }],
+    lines: [
+      { n: 1274, a: "2026-08-13T02:19:10Z WARN firewall-01 blocked outbound from server-02 ", hit: "to 45.153.160.2:4444", b: "" }
+    ],
+    timeline: [
+      { t: "02:19:10", label: "server-02 initiates outbound to 45.153.160.2:4444", dot: "#d8a35e" },
+      { t: "02:19:10", label: "firewall-01 drops the connection", dot: "#9397ab" },
+      { t: "post-run", label: "Threat-intel match: known C2 indicator → MITRE T1071, Command and Control", dot: "#d8a35e" }
+    ]
+  },
+  {
+    id: "f4", sev: "MEDIUM", ruleSev: "MEDIUM", llmSev: "MEDIUM", prov: "RULE-CAUGHT",
+    type: "error_rate_spike", host: "server-03", time: "02:18:30",
+    stamp: "2026-08-13T02:18:30Z · server-03",
+    title: "Error-rate spike — 7 ERROR/CRIT events within 60 seconds",
+    ruleWhy: "7 error-level events (>= 5) inside the 60s window.",
+    llmWhy: "Agrees with the rule on this one.",
+    explanation: "Seven error-level lines landed inside a minute, clustered around the connection-pool failure. On its own this is a symptom rather than a cause — it is the same incident as the server-03 exhaustion, seen at the error-rate level.",
+    predicate: "count(level in [ERROR, CRIT]) within 60s >= 5\n→ severity = MEDIUM",
+    ruleRef: "anomaly_detector.py · detect_error_bursts()",
+    chips: [],
+    lines: [
+      { n: 1188, a: "2026-08-13T02:18:30Z CRIT server-03 ", hit: "db connection pool exhausted (max=100, waiting=37)", b: "" },
+      { n: 1191, a: "2026-08-13T02:18:31Z ERROR server-03 ", hit: "503 upstream timeout on /api/orders", b: "" },
+      { n: 1203, a: "2026-08-13T02:18:44Z ERROR server-03 ", hit: "worker queue backlog 2411 jobs", b: "" },
+      { n: 1229, a: "2026-08-13T02:19:12Z ERROR server-03 ", hit: "503 upstream timeout on /api/orders", b: "" }
+    ],
+    timeline: [
+      { t: "02:18:30", label: "Burst window opens with the pool exhaustion", dot: "#c9c07a" },
+      { t: "02:19:12", label: "Seventh error-level event closes the window", dot: "#c9c07a" }
+    ]
+  },
+  {
+    id: "f5", sev: "LOW", ruleSev: "— below threshold", llmSev: "LOW", prov: "LLM-SURFACED",
+    type: "disk_pressure_note", host: "server-01", time: "02:14:55",
+    stamp: "2026-08-13T02:14:55Z · server-01",
+    title: "Disk at 78% on /var/log, server-01 — under the 80% rule threshold, raised by the model as a heads-up",
+    ruleWhy: "No rule fired. 78% sits under the 80% warn threshold.",
+    llmWhy: "Flagged it as worth watching, not as an incident.",
+    explanation: "Nothing fired here. The model noticed /var/log on server-01 at 78%, two points below the warning threshold, and surfaced it as context. It carries no rule-backed severity — treat it as a note, not a finding, and check it only if log volume is growing.",
+    predicate: "disk_pct >= 80  →  MEDIUM\ndisk_pct >= 90  →  HIGH\n\nobserved: 78%  →  no rule fired",
+    ruleRef: "anomaly_detector.py · DISK_WARN_PCT = 80",
+    chips: [{ text: "no rule fired" }],
+    lines: [
+      { n: 118, a: "2026-08-13T02:14:55Z INFO server-01 ", hit: "disk usage at 78%", b: " on /var/log" }
+    ],
+    timeline: [
+      { t: "02:14:55", label: "Reported at 78% — 2 points below the warn threshold", dot: "#9397ab" }
+    ]
+  }
+];
+
+// --------------------------------------------------------------------------
+// State
+// --------------------------------------------------------------------------
+const state = {
+  view: "incident",      // incident | partial | clear
+  filter: "all",         // all | dis | llm | open
+  selId: "f1",
+  checked: [],
+  marks: {},
+  copied: false,
+  manifest: false,
+  reason: "Reason — expected admin activity"
+};
+
+const REASONS = [
+  "Reason — expected admin activity",
+  "Reason — known scanner / test traffic",
+  "Reason — duplicate of an earlier finding",
+  "Reason — threshold too sensitive here"
+];
+
+// --------------------------------------------------------------------------
+// Selectors
+// --------------------------------------------------------------------------
+const all = () => (state.view === "clear" ? [] : FINDINGS);
+
+/* A finding the rules rated above what the model alone would have. This is the
+   number the header leads with, so it is defined in exactly one place. */
+const underrated = (f) => f.prov === "RULE-CAUGHT" && f.ruleSev !== f.llmSev;
+
+function visible() {
+  return all().filter((x) =>
+    state.filter === "dis"  ? underrated(x) :
+    state.filter === "llm"  ? x.prov === "LLM-SURFACED" :
+    state.filter === "open" ? !state.marks[x.id] : true);
+}
+
+const current = () => {
+  const list = visible();
+  return list.find((f) => f.id === state.selId) || list[0] || null;
+};
+
+function chipStyle(active) {
+  return active
+    ? { bg: "rgba(150,138,224,.18)", fg: "#d2cefd", bd: "#796cbf" }
+    : { bg: "transparent", fg: "#9397ab", bd: "rgba(233,233,237,.16)" };
+}
+
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+
+// --------------------------------------------------------------------------
+// Render
+// --------------------------------------------------------------------------
+function render() {
+  const list = visible();
+  const cur = current();
+  const disagree = all().filter(underrated);
+
+  const runId = state.view === "clear" ? "auth-2026-08-13-0300" : "auth-2026-08-13-0214";
+  const runWindow = state.view === "clear"
+    ? "03:00–03:06 UTC · 13 Aug 2026" : "02:14–02:20 UTC · 13 Aug 2026";
+  const runParsed = state.view === "partial"
+    ? "2,000 lines parsed · 0 unparsed · 100 not explained"
+    : "2,000 lines parsed · 0 unparsed";
+
+  document.getElementById("app").innerHTML = [
+    header(disagree.length),
+    runBar(runId, runWindow, runParsed),
+    state.manifest ? manifestStrip() : "",
+    state.view === "partial" ? partialWarning() : "",
+    `<div class="body">${listPane(list, cur, disagree.length)}${detailPane(cur)}</div>`,
+    footer()
+  ].join("");
+}
+
+function header(underratedCount) {
+  const seg = (val, label) =>
+    `<label class="seg-opt"><input type="radio" name="runview" data-view="${val}"
+      ${state.view === val ? "checked" : ""}><span>${label}</span></label>`;
+  return `
+  <header class="hdr">
+    <div class="brand"><b>itsoc</b><span>local log anomaly review</span></div>
+    <div class="pill pill-accent">
+      <b>${underratedCount}</b><span>findings a raw LLM would have under-rated</span>
+    </div>
+    <div class="pill pill-local">
+      <span class="dot-live"></span><span>processed locally · 0 bytes leave this machine</span>
+    </div>
+    <div class="seg" style="margin-left:4px">
+      ${seg("incident", "Incident run")}${seg("partial", "Partial")}${seg("clear", "All clear")}
+    </div>
+  </header>`;
+}
+
+function runBar(runId, runWindow, runParsed) {
+  return `
+  <div class="runbar">
+    <div class="runmeta">
+      <b>${esc(runId)}</b>
+      <span class="sep">·</span><span>${esc(runWindow)}</span>
+      <span class="sep">·</span><span>server-01/02/03 + firewall-01</span>
+      <span class="sep">·</span><span>${esc(runParsed)}</span>
+    </div>
+    <div class="runacts">
+      <button class="btn btn-secondary" data-act="noop">Export JSON</button>
+      <button class="btn btn-secondary" data-act="print">Print report</button>
+      <button class="btn btn-primary" data-act="manifest">Verify run manifest</button>
+    </div>
+  </div>`;
+}
+
+function manifestStrip() {
+  return `
+  <div class="manifest">
+    <span><k>sha256(input)</k> 8f2c…a41d</span>
+    <span><k>detector</k> 43f0560f</span>
+    <span><k>ruleset</k> v1</span>
+    <span><k>model</k> llama3.1:8b · temp 0</span>
+    <span><k>signed</k> 2026-08-13T02:20:41Z</span>
+    <span style="color:var(--ok)">signature valid</span>
+  </div>`;
+}
+
+function partialWarning() {
+  return `
+  <div class="warn">
+    <span class="warn-bar"></span>
+    <div>
+      <div class="warn-t">Chunk 14 of 20 was not analyzed by the model</div>
+      <div class="warn-b">The model returned off-schema output for lines 1301–1400 and the section was
+        skipped. Deterministic rules still ran across every line, so severities below remain complete —
+        only the plain-language explanations are missing for that range.</div>
+    </div>
+    <button class="btn btn-secondary" style="margin-left:auto;flex:none" data-act="noop">Re-run chunk</button>
+  </div>`;
+}
+
+function listPane(list, cur, disagreeCount) {
+  const f = (key, label, count) => {
+    const s = chipStyle(state.filter === key);
+    return `<button class="chip" data-filter="${key}"
+      style="background:${s.bg};color:${s.fg};border:1px solid ${s.bd}">${label} ${count}</button>`;
+  };
+
+  const bulk = state.checked.length
+    ? `<div class="bulk">
+         <span>${state.checked.length} selected</span>
+         <div>
+           <button class="btn btn-primary" data-act="bulk-confirm">Mark true positive</button>
+           <button class="btn btn-secondary" data-act="bulk-clear">Clear</button>
+         </div>
+       </div>`
+    : "";
+
+  const rows = list.length
+    ? list.map((x) => row(x, cur)).join("")
+    : emptyList();
+
+  return `
+  <section class="list-pane">
+    <div class="filters">
+      ${f("all", "All", all().length)}
+      ${f("dis", "Rule ≠ LLM", disagreeCount)}
+      ${f("llm", "LLM-surfaced", all().filter((x) => x.prov === "LLM-SURFACED").length)}
+      ${f("open", "Unreviewed", all().filter((x) => !state.marks[x.id]).length)}
+      <span class="hint">j / k move · x select · e explain</span>
+    </div>
+    ${bulk}
+    <div class="rows">${rows}</div>
+  </section>`;
+}
+
+function row(f, cur) {
+  const on = cur && f.id === cur.id;
+  const dis = underrated(f);
+  const llmSurfaced = f.prov === "LLM-SURFACED";
+  const sevColor = SEV[f.sev];
+
+  const provBg = llmSurfaced ? "transparent" : "#3f424d";
+  const provFg = llmSurfaced ? "#9397ab" : "#e4e7f5";
+  const provBd = llmSurfaced ? "rgba(233,233,237,.22)" : "transparent";
+
+  const deltaLabel = dis ? "under-rated by LLM" : (llmSurfaced ? "note only" : "agree");
+  const deltaBg = dis ? "rgba(226,128,127,.14)" : "transparent";
+  const deltaFg = dis ? "#e2807f" : "#75798c";
+
+  const chips = f.chips.length
+    ? `<div class="chips">${f.chips.map((c) => `<span class="tagm">${esc(c.text)}</span>`).join("")}</div>`
+    : "";
+
+  return `
+  <div class="row" data-row="${f.id}"
+       style="background:${on ? "#232532" : "rgba(35,37,50,.42)"};
+              box-shadow:${on ? "inset 0 0 0 1px #796cbf" : "inset 0 0 0 1px rgba(233,233,237,.08)"}">
+    <div class="row-rail">
+      <input type="checkbox" data-check="${f.id}" ${state.checked.includes(f.id) ? "checked" : ""}>
+      <span class="row-sev" style="background:${sevColor}"></span>
+    </div>
+    <div class="row-main">
+      <div class="row-head">
+        <span class="sev-label" style="color:${sevColor}">${esc(f.sev)}</span>
+        <span class="prov" style="background:${provBg};color:${provFg};border:1px solid ${provBd}">${esc(f.prov)}</span>
+        <span class="stamp">${esc(f.time)}</span>
+      </div>
+      <div class="row-title">${esc(f.title)}</div>
+      <div class="row-meta"><span>${esc(f.type)}</span><span class="sep">·</span><span>${esc(f.host)}</span></div>
+      <div class="cmp">
+        <div class="cmp-cell">
+          <div class="cmp-k">Rule</div>
+          <div class="cmp-v" style="font-weight:500;color:${sevColor}">${esc(f.ruleSev)}</div>
+        </div>
+        <div class="cmp-div"></div>
+        <div class="cmp-cell">
+          <div class="cmp-k">LLM alone</div>
+          <div class="cmp-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(f.llmSev)}</div>
+        </div>
+        <div class="cmp-delta" style="background:${deltaBg}">
+          <span style="color:${deltaFg}">${deltaLabel}</span>
+        </div>
+      </div>
+      ${chips}
+    </div>
+  </div>`;
+}
+
+function emptyList() {
+  const clear = state.view === "clear";
+  return `
+  <div class="empty">
+    <div class="empty-mark">✓</div>
+    <div class="empty-t">${clear ? "All clear — 0 anomalies" : "Nothing matches this filter"}</div>
+    <div class="empty-b">${clear
+      ? "2,000 lines parsed, every rule evaluated, nothing crossed a threshold and the model surfaced no below-threshold notes. The run is still signed and exportable."
+      : "Clear the filter to see the rest of this run's findings."}</div>
+  </div>`;
+}
+
+function detailPane(d) {
+  if (!d) {
+    const clear = state.view === "clear";
+    return `
+    <section class="detail-pane">
+      <div class="nodetail">
+        <div class="nodetail-t">${clear ? "No finding to review" : "Select a finding"}</div>
+        <div class="nodetail-b">${clear
+          ? "This run produced no anomalies. The signed manifest above is what you attach to the audit record."
+          : "Pick a row on the left, or press j and k to move through the list."}</div>
+      </div>
+    </section>`;
+  }
+
+  const dis = underrated(d);
+  const llmSurfaced = d.prov === "LLM-SURFACED";
+  const sevColor = SEV[d.sev];
+  const mark = state.marks[d.id];
+
+  const deltaHead = dis ? "Rule overrode the model"
+    : (llmSurfaced ? "Model note, no rule" : "Rule and model agree");
+  const deltaBody = dis
+    ? "The deterministic rule holds. Left to the model alone this would have been rated "
+      + d.llmSev.toLowerCase() + " and likely gone unactioned."
+    : (llmSurfaced
+        ? "Below every rule threshold, so it carries no rule-backed severity. Shown as context only."
+        : "Both landed on the same severity; the rule is still what sets it.");
+
+  const evidence = d.lines.map((l) => `
+    <div class="ev-row" style="background:${l.crit ? "rgba(226,128,127,.10)" : "transparent"}">
+      <span class="ev-n">${l.n}</span>
+      <span class="ev-t">${esc(l.a)}<span class="ev-hit"
+        style="background:${l.crit ? "#e2807f" : "#b5abfc"}">${esc(l.hit)}</span>${esc(l.b)}</span>
+    </div>`).join("");
+
+  const timeline = d.timeline.map((t) => `
+    <div class="tl">
+      <span class="tl-t">${esc(t.t)}</span>
+      <span class="tl-rail"><span class="tl-dot" style="background:${t.dot}"></span><span class="tl-line"></span></span>
+      <span class="tl-l">${esc(t.label)}</span>
+    </div>`).join("");
+
+  const markStatus = mark === "tp"
+    ? "Marked true positive · " + state.reason.replace("Reason — ", "")
+    : mark === "fp"
+      ? "Dismissed false positive · " + state.reason.replace("Reason — ", "")
+      : "Unreviewed";
+  const markColor = mark === "tp" ? "#8ecf9a" : mark === "fp" ? "#9397ab" : "#75798c";
+
+  return `
+  <section class="detail-pane">
+    <div class="detail">
+      <div class="d-head">
+        <span class="sev-label" style="color:${sevColor}">${esc(d.sev)}</span>
+        <span class="prov" style="background:${llmSurfaced ? "transparent" : "#3f424d"};
+              color:${llmSurfaced ? "#9397ab" : "#e4e7f5"};
+              border:1px solid ${llmSurfaced ? "rgba(233,233,237,.22)" : "transparent"}">${esc(d.prov)}</span>
+        <span class="d-type">${esc(d.type)}</span>
+        <span class="stamp">${esc(d.stamp)}</span>
+      </div>
+
+      <h3 class="d-title">${esc(d.title)}</h3>
+
+      <div class="verdicts">
+        <div class="vcard" style="background:var(--color-surface);box-shadow:var(--shadow-sm)">
+          <div class="vcard-k">Rule verdict · authoritative</div>
+          <div class="vcard-v" style="font-weight:500;color:${sevColor}">${esc(d.ruleSev)}</div>
+          <div class="vcard-s">${esc(d.ruleWhy)}</div>
+        </div>
+        <div class="vcard" style="background:rgba(35,37,50,.5);box-shadow:inset 0 0 0 1px rgba(233,233,237,.10)">
+          <div class="vcard-k">LLM alone · explanatory only</div>
+          <div class="vcard-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(d.llmSev)}</div>
+          <div class="vcard-s">${esc(d.llmWhy)}</div>
+        </div>
+        <div class="vcard" style="background:${dis ? "rgba(226,128,127,.10)" : "rgba(35,37,50,.5)"};
+             box-shadow:inset 0 0 0 1px ${dis ? "rgba(226,128,127,.35)" : "rgba(233,233,237,.10)"}">
+          <div class="vcard-k">Outcome</div>
+          <div class="vcard-v" style="font-weight:500;color:${dis ? "#e2807f" : "#b2b6ca"}">${deltaHead}</div>
+          <div class="vcard-s" style="color:var(--color-neutral-400);text-wrap:pretty">${deltaBody}</div>
+        </div>
+      </div>
+
+      <div class="panel explain">
+        <div class="panel-k">Plain-language explanation · llama3.1:8b, local</div>
+        <p>${esc(d.explanation)}</p>
+      </div>
+
+      <div class="ev-head">
+        <h5>Evidence</h5>
+        <span>verbatim from the source log — nothing generated</span>
+        <button class="btn btn-secondary" style="margin-left:auto" data-act="copy">${
+          state.copied ? "Evidence block copied" : "Copy evidence block"}</button>
+      </div>
+      <div class="ev">${evidence}</div>
+
+      <div class="split">
+        <div class="panel">
+          <div class="panel-k">Rule predicate that fired</div>
+          <div class="pred">${esc(d.predicate)}</div>
+          <div class="pred-ref">${esc(d.ruleRef)}</div>
+        </div>
+        <div class="panel">
+          <div class="panel-k">Event sequence</div>
+          ${timeline}
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="mark-head">
+          <div class="panel-k" style="margin:0">Analyst mark</div>
+          <span class="note">read-only tool · this records your judgement, it changes nothing on the hosts</span>
+          <span class="status" style="color:${markColor}">${esc(markStatus)}</span>
+        </div>
+        <div class="mark-acts">
+          <button class="btn btn-primary" data-act="tp">Confirm — true positive</button>
+          <button class="btn btn-secondary" data-act="fp">Dismiss — false positive</button>
+          <select class="input" data-act="reason">
+            ${REASONS.map((r) => `<option ${r === state.reason ? "selected" : ""}>${esc(r)}</option>`).join("")}
+          </select>
+        </div>
+      </div>
+    </div>
+  </section>`;
+}
+
+function footer() {
+  return `
+  <footer class="ftr">
+    <span class="local"><i></i>processed locally · 0 bytes left the machine</span>
+    <span>model llama3.1:8b</span>
+    <span>ruleset v1</span>
+    <span>detector 43f0560f</span>
+    <span class="ro">read-only · no automated actions</span>
+  </footer>`;
+}
+
+// --------------------------------------------------------------------------
+// Behaviour
+// --------------------------------------------------------------------------
+function setState(patch) { Object.assign(state, patch); render(); }
+
+function toggleCheck(id) {
+  setState({ checked: state.checked.includes(id)
+    ? state.checked.filter((x) => x !== id)
+    : state.checked.concat(id) });
+}
+
+function mark(id, v) {
+  setState({ marks: Object.assign({}, state.marks, { [id]: v }) });
+}
+
+function copyEvidence() {
+  const d = current();
+  if (d && navigator.clipboard) {
+    navigator.clipboard.writeText([
+      d.title, "",
+      d.lines.map((l) => l.n + "  " + l.a + l.hit + l.b).join("\n"), "",
+      d.predicate, "", d.ruleRef
+    ].join("\n")).catch(() => {});
+  }
+  setState({ copied: true });
+}
+
+document.addEventListener("click", (e) => {
+  const t = e.target;
+
+  const check = t.closest("[data-check]");
+  if (check) { e.stopPropagation(); toggleCheck(check.dataset.check); return; }
+
+  const filter = t.closest("[data-filter]");
+  if (filter) { setState({ filter: filter.dataset.filter }); return; }
+
+  const act = t.closest("[data-act]");
+  if (act) {
+    switch (act.dataset.act) {
+      case "manifest": return setState({ manifest: !state.manifest });
+      case "print": return window.print();
+      case "copy": return copyEvidence();
+      case "tp": { const d = current(); return d && mark(d.id, "tp"); }
+      case "fp": { const d = current(); return d && mark(d.id, "fp"); }
+      case "bulk-confirm": {
+        const m = Object.assign({}, state.marks);
+        state.checked.forEach((id) => { m[id] = "tp"; });
+        return setState({ marks: m, checked: [] });
+      }
+      case "bulk-clear": return setState({ checked: [] });
+      default: return;           // noop
+    }
+  }
+
+  const row = t.closest("[data-row]");
+  if (row) setState({ selId: row.dataset.row, copied: false });
+});
+
+document.addEventListener("change", (e) => {
+  const view = e.target.closest("[data-view]");
+  if (view) return setState({ view: view.dataset.view, selId: "f1" });
+  if (e.target.matches('[data-act="reason"]')) return setState({ reason: e.target.value });
+});
+
+/* j/k to move, x to select, e to mark reviewed — the shortcuts the list
+   advertises. Ignored while typing in a field. */
+document.addEventListener("keydown", (e) => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement.tagName)) return;
+
+  const list = visible();
+  if (!list.length) return;
+  const i = Math.max(0, list.findIndex((f) => f.id === (current() || {}).id));
+
+  if (e.key === "j") { e.preventDefault(); setState({ selId: list[Math.min(i + 1, list.length - 1)].id, copied: false }); }
+  if (e.key === "k") { e.preventDefault(); setState({ selId: list[Math.max(i - 1, 0)].id, copied: false }); }
+  if (e.key === "x") { e.preventDefault(); toggleCheck(list[i].id); }
+  if (e.key === "e") { e.preventDefault(); mark(list[i].id, "tp"); }
+});
+
+render();
+</script>
+</body>
+</html>
