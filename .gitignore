@@ -10,3 +10,6 @@ demo_threat_report.*
 
 # compare-mode ablation cache (local inference results, machine-specific)
 .compare_cache.json
+
+# adapter output when written next to the console (serve.py keeps it in memory)
+console/console_state.json

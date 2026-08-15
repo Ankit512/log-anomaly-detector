@@ -369,13 +369,39 @@ const FINDINGS = [
   }
 ];
 
-// --------------------------------------------------------------------------
-// State
-// --------------------------------------------------------------------------
+/* Fixture -> the same shape console/adapter.py emits, so render() only ever
+   deals with one contract. `live:false` is what drives the demo-only affordances
+   (the run-state switcher); a real run's state is derived, never switchable. */
+function fixtureState() {
+  return {
+    live: false,
+    runId: "auth-2026-08-13-0214", runWindow: "02:14–02:20 UTC · 13 Aug 2026",
+    runHosts: "server-01/02/03 + firewall-01", runParsed: "2,000 lines parsed · 0 unparsed",
+    manifest: {
+      input_sha256: "8f2ca41d…(fixture)", detector_sha256: "43f0560f…(fixture)",
+      model: "llama3.1:8b", temperature: 0, ruleset: "v1"
+    },
+    compareRun: true, underratedCount: FINDINGS.filter((f) => f.ruleSev !== f.llmSev
+      && f.prov === "RULE-CAUGHT").length,
+    chunksUsable: 20, chunksTotal: 20, degraded: false, analyzerErrors: 0,
+    findings: FINDINGS.map((f, i) => ({
+      ...f, id: f.id || "f" + i,
+      sevColor: SEV[f.sev],
+      hostDerived: true, occurrences: 1, linesNote: null,
+      delta: f.prov !== "RULE-CAUGHT" ? "note-only"
+        : f.ruleSev === f.llmSev ? "agree" : "under-rated",
+      timeline: (f.timeline || []).map((t) => ({ ...t }))
+    }))
+  };
+}
+
+// Replaced at bootstrap by live data when a report is being served.
+let DATA = fixtureState();
+
 const state = {
-  view: "incident",      // incident | partial | clear
+  view: "incident",      // demo-only: incident | partial | clear
   filter: "all",         // all | dis | llm | open
-  selId: "f1",
+  selId: null,
   checked: [],
   marks: {},
   copied: false,
@@ -393,11 +419,20 @@ const REASONS = [
 // --------------------------------------------------------------------------
 // Selectors
 // --------------------------------------------------------------------------
-const all = () => (state.view === "clear" ? [] : FINDINGS);
+/* In live mode the run's contents are whatever the analyzer produced. The demo
+   view switcher only applies to the fixture. */
+const all = () => (!DATA.live && state.view === "clear" ? [] : DATA.findings);
 
-/* A finding the rules rated above what the model alone would have. This is the
-   number the header leads with, so it is defined in exactly one place. */
-const underrated = (f) => f.prov === "RULE-CAUGHT" && f.ruleSev !== f.llmSev;
+/* A finding the rules rated above what the model alone would have. Sourced from
+   the adapter's delta so the console never re-derives severity semantics. */
+const underrated = (f) => f.delta === "under-rated";
+
+/* Zero findings is an All-clear run; a degraded chunk is a Partial run. Both are
+   properties of the data, not modes a viewer picks. */
+const isClear = () => all().length === 0;
+const isPartial = () => DATA.live
+  ? (DATA.degraded || DATA.analyzerErrors > 0)
+  : state.view === "partial";
 
 function visible() {
   return all().filter((x) =>
@@ -429,18 +464,11 @@ function render() {
   const cur = current();
   const disagree = all().filter(underrated);
 
-  const runId = state.view === "clear" ? "auth-2026-08-13-0300" : "auth-2026-08-13-0214";
-  const runWindow = state.view === "clear"
-    ? "03:00–03:06 UTC · 13 Aug 2026" : "02:14–02:20 UTC · 13 Aug 2026";
-  const runParsed = state.view === "partial"
-    ? "2,000 lines parsed · 0 unparsed · 100 not explained"
-    : "2,000 lines parsed · 0 unparsed";
-
   document.getElementById("app").innerHTML = [
     header(disagree.length),
-    runBar(runId, runWindow, runParsed),
+    runBar(),
     state.manifest ? manifestStrip() : "",
-    state.view === "partial" ? partialWarning() : "",
+    isPartial() ? partialWarning() : "",
     `<div class="body">${listPane(list, cur, disagree.length)}${detailPane(cur)}</div>`,
     footer()
   ].join("");
@@ -450,61 +478,94 @@ function header(underratedCount) {
   const seg = (val, label) =>
     `<label class="seg-opt"><input type="radio" name="runview" data-view="${val}"
       ${state.view === val ? "checked" : ""}><span>${label}</span></label>`;
+
+  /* Without a compare run there is no honest number to show here. An unrun
+     ablation is not "0 under-rated" — the pill says so rather than implying
+     the model agreed with every rule. */
+  const comparePill = DATA.compareRun
+    ? `<div class="pill pill-accent">
+         <b>${underratedCount}</b><span>findings a raw LLM would have under-rated</span>
+       </div>`
+    : `<div class="pill" style="border:1px solid rgba(233,233,237,.16);color:var(--color-neutral-500)">
+         <span style="font-size:11px">compare not run — rerun with <code>--compare</code>
+         to measure what the model alone would have rated these</span>
+       </div>`;
+
   return `
   <header class="hdr">
     <div class="brand"><b>itsoc</b><span>local log anomaly review</span></div>
-    <div class="pill pill-accent">
-      <b>${underratedCount}</b><span>findings a raw LLM would have under-rated</span>
-    </div>
+    ${comparePill}
     <div class="pill pill-local">
       <span class="dot-live"></span><span>processed locally · 0 bytes leave this machine</span>
     </div>
-    <div class="seg" style="margin-left:4px">
+    ${DATA.live ? "" : `<div class="seg" style="margin-left:4px">
       ${seg("incident", "Incident run")}${seg("partial", "Partial")}${seg("clear", "All clear")}
-    </div>
+    </div>`}
   </header>`;
 }
 
-function runBar(runId, runWindow, runParsed) {
+function runBar() {
   return `
   <div class="runbar">
     <div class="runmeta">
-      <b>${esc(runId)}</b>
-      <span class="sep">·</span><span>${esc(runWindow)}</span>
-      <span class="sep">·</span><span>server-01/02/03 + firewall-01</span>
-      <span class="sep">·</span><span>${esc(runParsed)}</span>
+      <b>${esc(DATA.runId)}</b>
+      ${DATA.runWindow ? `<span class="sep">·</span><span>${esc(DATA.runWindow)}</span>` : ""}
+      <span class="sep">·</span><span>${esc(DATA.runHosts)}</span>
+      <span class="sep">·</span><span>${esc(DATA.runParsed)}</span>
     </div>
     <div class="runacts">
-      <button class="btn btn-secondary" data-act="noop">Export JSON</button>
       <button class="btn btn-secondary" data-act="print">Print report</button>
-      <button class="btn btn-primary" data-act="manifest">Verify run manifest</button>
+      <button class="btn btn-primary" data-act="manifest">Run manifest · integrity</button>
     </div>
   </div>`;
 }
 
+/* Integrity, not provenance. Every value here is recomputable from files on
+   disk with sha256sum; nothing signs the run, so no "signed" or "signature
+   valid" claim appears — that would assert an attestation nobody made. */
 function manifestStrip() {
+  const m = DATA.manifest || {};
+  const short = (h) => (h ? String(h).slice(0, 16) + "…" : "unavailable");
   return `
   <div class="manifest">
-    <span><k>sha256(input)</k> 8f2c…a41d</span>
-    <span><k>detector</k> 43f0560f</span>
-    <span><k>ruleset</k> v1</span>
-    <span><k>model</k> llama3.1:8b · temp 0</span>
-    <span><k>signed</k> 2026-08-13T02:20:41Z</span>
-    <span style="color:var(--ok)">signature valid</span>
+    <span><k>sha256(input)</k> ${esc(short(m.input_sha256))}</span>
+    <span><k>sha256(detector)</k> ${esc(short(m.detector_sha256))}</span>
+    <span><k>ruleset</k> ${esc(m.ruleset || "—")}</span>
+    <span><k>model</k> ${esc(m.model || "—")} · temp ${esc(String(m.temperature ?? "—"))}</span>
+    <span><k>generated</k> ${esc((DATA.generatedAt || "").slice(0, 19) || "—")}</span>
+    <span style="color:var(--color-neutral-500)">integrity hashes — recomputable, not a signature</span>
   </div>`;
 }
 
 function partialWarning() {
+  if (!DATA.live) {
+    return warnBox("Chunk 14 of 20 was not analyzed by the model",
+      "The model returned off-schema output for lines 1301–1400 and the section was skipped. " +
+      "Deterministic rules still ran across every line, so severities below remain complete — " +
+      "only the plain-language explanations are missing for that range.");
+  }
+  const missing = (DATA.chunksTotal || 0) - (DATA.chunksUsable || 0);
+  const bits = [];
+  if (DATA.analyzerErrors) {
+    bits.push(`${DATA.analyzerErrors} chunk(s) were not analyzed by the model (off-schema output).`);
+  }
+  if (missing > 0) {
+    bits.push(`${missing} of ${DATA.chunksTotal} chunk(s) returned no usable answer in the ` +
+              `compare pass, so their findings show UNKNOWN rather than a severity — the ` +
+              `model was never able to rate those lines, which is not the same as missing them.`);
+  }
+  return warnBox("This run is partial",
+    bits.join(" ") + " Deterministic rules still ran across every line, so the severities below are complete.");
+}
+
+function warnBox(title, body) {
   return `
   <div class="warn">
     <span class="warn-bar"></span>
     <div>
-      <div class="warn-t">Chunk 14 of 20 was not analyzed by the model</div>
-      <div class="warn-b">The model returned off-schema output for lines 1301–1400 and the section was
-        skipped. Deterministic rules still ran across every line, so severities below remain complete —
-        only the plain-language explanations are missing for that range.</div>
+      <div class="warn-t">${esc(title)}</div>
+      <div class="warn-b">${esc(body)}</div>
     </div>
-    <button class="btn btn-secondary" style="margin-left:auto;flex:none" data-act="noop">Re-run chunk</button>
   </div>`;
 }
 
@@ -547,13 +608,17 @@ function row(f, cur) {
   const on = cur && f.id === cur.id;
   const dis = underrated(f);
   const llmSurfaced = f.prov === "LLM-SURFACED";
-  const sevColor = SEV[f.sev];
+  const sevColor = f.sevColor || SEV[f.sev] || "#9397ab";
 
   const provBg = llmSurfaced ? "transparent" : "#3f424d";
   const provFg = llmSurfaced ? "#9397ab" : "#e4e7f5";
   const provBd = llmSurfaced ? "rgba(233,233,237,.22)" : "transparent";
 
-  const deltaLabel = dis ? "under-rated by LLM" : (llmSurfaced ? "note only" : "agree");
+  const DELTA_LABEL = {
+    "under-rated": "under-rated by LLM", "over-rated": "over-rated by LLM",
+    "agree": "agree", "unknown": "model gave no usable answer", "note-only": "note only"
+  };
+  const deltaLabel = DELTA_LABEL[f.delta] || (llmSurfaced ? "note only" : "—");
   const deltaBg = dis ? "rgba(226,128,127,.14)" : "transparent";
   const deltaFg = dis ? "#e2807f" : "#75798c";
 
@@ -576,20 +641,27 @@ function row(f, cur) {
         <span class="stamp">${esc(f.time)}</span>
       </div>
       <div class="row-title">${esc(f.title)}</div>
-      <div class="row-meta"><span>${esc(f.type)}</span><span class="sep">·</span><span>${esc(f.host)}</span></div>
+      <div class="row-meta"><span>${esc(f.type)}</span><span class="sep">·</span>
+        <span>${esc(f.host)}${f.hostDerived === false ? " (source IP)" : ""}</span></div>
       <div class="cmp">
         <div class="cmp-cell">
           <div class="cmp-k">Rule</div>
           <div class="cmp-v" style="font-weight:500;color:${sevColor}">${esc(f.ruleSev)}</div>
         </div>
+        ${DATA.compareRun ? `
         <div class="cmp-div"></div>
         <div class="cmp-cell">
           <div class="cmp-k">LLM alone</div>
-          <div class="cmp-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(f.llmSev)}</div>
+          <div class="cmp-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(f.llmSev || "—")}</div>
         </div>
         <div class="cmp-delta" style="background:${deltaBg}">
           <span style="color:${deltaFg}">${deltaLabel}</span>
-        </div>
+        </div>` : `
+        <div class="cmp-div"></div>
+        <div class="cmp-cell">
+          <div class="cmp-k">LLM alone</div>
+          <div class="cmp-v" style="color:var(--color-neutral-600)">compare not run</div>
+        </div>`}
       </div>
       ${chips}
     </div>
@@ -597,26 +669,29 @@ function row(f, cur) {
 }
 
 function emptyList() {
-  const clear = state.view === "clear";
+  const clear = isClear();
+  const body = DATA.live
+    ? `${esc(DATA.runParsed)}, every rule evaluated, nothing crossed a threshold. `
+      + `The run manifest above still records the input and detector hashes.`
+    : "2,000 lines parsed, every rule evaluated, nothing crossed a threshold and the model "
+      + "surfaced no below-threshold notes. The run manifest is still recorded and exportable.";
   return `
   <div class="empty">
     <div class="empty-mark">✓</div>
     <div class="empty-t">${clear ? "All clear — 0 anomalies" : "Nothing matches this filter"}</div>
-    <div class="empty-b">${clear
-      ? "2,000 lines parsed, every rule evaluated, nothing crossed a threshold and the model surfaced no below-threshold notes. The run is still signed and exportable."
-      : "Clear the filter to see the rest of this run's findings."}</div>
+    <div class="empty-b">${clear ? body : "Clear the filter to see the rest of this run's findings."}</div>
   </div>`;
 }
 
 function detailPane(d) {
   if (!d) {
-    const clear = state.view === "clear";
+    const clear = isClear();          // derived from the data, not the demo switcher
     return `
     <section class="detail-pane">
       <div class="nodetail">
         <div class="nodetail-t">${clear ? "No finding to review" : "Select a finding"}</div>
         <div class="nodetail-b">${clear
-          ? "This run produced no anomalies. The signed manifest above is what you attach to the audit record."
+          ? "This run produced no anomalies. The run manifest above records the input and detector hashes for the audit trail."
           : "Pick a row on the left, or press j and k to move through the list."}</div>
       </div>
     </section>`;
@@ -624,23 +699,33 @@ function detailPane(d) {
 
   const dis = underrated(d);
   const llmSurfaced = d.prov === "LLM-SURFACED";
-  const sevColor = SEV[d.sev];
+  const sevColor = d.sevColor || SEV[d.sev] || "#9397ab";
   const mark = state.marks[d.id];
 
-  const deltaHead = dis ? "Rule overrode the model"
-    : (llmSurfaced ? "Model note, no rule" : "Rule and model agree");
-  const deltaBody = dis
-    ? "The deterministic rule holds. Left to the model alone this would have been rated "
-      + d.llmSev.toLowerCase() + " and likely gone unactioned."
-    : (llmSurfaced
-        ? "Below every rule threshold, so it carries no rule-backed severity. Shown as context only."
-        : "Both landed on the same severity; the rule is still what sets it.");
+  const DELTA_HEAD = {
+    "under-rated": "Rule overrode the model", "over-rated": "Model was more alarmed",
+    "agree": "Rule and model agree", "unknown": "No usable answer from the model",
+    "note-only": "Model note, no rule"
+  };
+  const deltaHead = DELTA_HEAD[d.delta] || (llmSurfaced ? "Model note, no rule" : "—");
+  const deltaBody =
+    d.delta === "under-rated"
+      ? "The deterministic rule holds. Left to the model alone this would have been rated "
+        + String(d.llmSev || "").toLowerCase() + " and likely gone unactioned."
+    : d.delta === "over-rated"
+      ? "The model rated this higher than the rule does. The rule's severity is still what stands."
+    : d.delta === "unknown"
+      ? "The model returned no usable output for these lines, so there is nothing to compare "
+        + "against — this is an absence of evidence, not evidence the model missed it."
+    : llmSurfaced
+      ? "Below every rule threshold, so it carries no rule-backed severity. Shown as context only."
+      : "Both landed on the same severity; the rule is still what sets it.";
 
   const evidence = d.lines.map((l) => `
     <div class="ev-row" style="background:${l.crit ? "rgba(226,128,127,.10)" : "transparent"}">
-      <span class="ev-n">${l.n}</span>
-      <span class="ev-t">${esc(l.a)}<span class="ev-hit"
-        style="background:${l.crit ? "#e2807f" : "#b5abfc"}">${esc(l.hit)}</span>${esc(l.b)}</span>
+      <span class="ev-n">${esc(l.n)}</span>
+      <span class="ev-t">${esc(l.a)}${l.hit ? `<span class="ev-hit"
+        style="background:${l.crit ? "#e2807f" : "#b5abfc"}">${esc(l.hit)}</span>` : ""}${esc(l.b)}</span>
     </div>`).join("");
 
   const timeline = d.timeline.map((t) => `
@@ -677,17 +762,24 @@ function detailPane(d) {
           <div class="vcard-v" style="font-weight:500;color:${sevColor}">${esc(d.ruleSev)}</div>
           <div class="vcard-s">${esc(d.ruleWhy)}</div>
         </div>
+        ${DATA.compareRun ? `
         <div class="vcard" style="background:rgba(35,37,50,.5);box-shadow:inset 0 0 0 1px rgba(233,233,237,.10)">
           <div class="vcard-k">LLM alone · explanatory only</div>
-          <div class="vcard-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(d.llmSev)}</div>
-          <div class="vcard-s">${esc(d.llmWhy)}</div>
+          <div class="vcard-v" style="color:${dis ? "#b2b6ca" : sevColor}">${esc(d.llmSev || "—")}</div>
+          <div class="vcard-s">${esc(d.llmWhy || "")}</div>
         </div>
         <div class="vcard" style="background:${dis ? "rgba(226,128,127,.10)" : "rgba(35,37,50,.5)"};
              box-shadow:inset 0 0 0 1px ${dis ? "rgba(226,128,127,.35)" : "rgba(233,233,237,.10)"}">
           <div class="vcard-k">Outcome</div>
           <div class="vcard-v" style="font-weight:500;color:${dis ? "#e2807f" : "#b2b6ca"}">${deltaHead}</div>
           <div class="vcard-s" style="color:var(--color-neutral-400);text-wrap:pretty">${deltaBody}</div>
-        </div>
+        </div>` : `
+        <div class="vcard" style="background:rgba(35,37,50,.5);box-shadow:inset 0 0 0 1px rgba(233,233,237,.10)">
+          <div class="vcard-k">LLM alone · not measured</div>
+          <div class="vcard-v" style="color:var(--color-neutral-600);font-size:15px">compare not run</div>
+          <div class="vcard-s">Re-run the analyzer with <code>--compare</code> to record what this
+            model rates the same events with no rules and no pre-flags.</div>
+        </div>`}
       </div>
 
       <div class="panel explain">
@@ -697,7 +789,9 @@ function detailPane(d) {
 
       <div class="ev-head">
         <h5>Evidence</h5>
-        <span>verbatim from the source log — nothing generated</span>
+        <span>${d.linesNote
+          ? esc(d.linesNote)
+          : "verbatim from the source log — nothing generated"}</span>
         <button class="btn btn-secondary" style="margin-left:auto" data-act="copy">${
           state.copied ? "Evidence block copied" : "Copy evidence block"}</button>
       </div>
@@ -734,12 +828,14 @@ function detailPane(d) {
 }
 
 function footer() {
+  const m = DATA.manifest || {};
+  const short = (h) => (h ? String(h).slice(0, 8) : "—");
   return `
   <footer class="ftr">
     <span class="local"><i></i>processed locally · 0 bytes left the machine</span>
-    <span>model llama3.1:8b</span>
-    <span>ruleset v1</span>
-    <span>detector 43f0560f</span>
+    <span>model ${esc(m.model || "—")}</span>
+    <span>ruleset ${esc(m.ruleset || "—")}</span>
+    <span>detector ${esc(short(m.detector_sha256))}</span>
     <span class="ro">read-only · no automated actions</span>
   </footer>`;
 }
@@ -824,7 +920,32 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "e") { e.preventDefault(); mark(list[i].id, "tp"); }
 });
 
-render();
+/* Data bootstrap, in order of directness:
+     1. window.CONSOLE_DATA — injected by console/serve.py
+     2. ./console_state.json — adapter output sitting next to this file
+     3. the bundled fixture — so the file always opens, even with no run
+   The console never fetches anything off this machine; over file:// the fetch
+   fails by design and the fixture is used. */
+function boot() {
+  if (window.CONSOLE_DATA) {
+    DATA = window.CONSOLE_DATA;
+    render();
+    return;
+  }
+  render();                                   // fixture first, so it never blanks
+  fetch("./console_state.json", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((data) => {
+      if (data && Array.isArray(data.findings)) {
+        DATA = data;
+        state.selId = null;
+        render();
+      }
+    })
+    .catch(() => {});                          // file:// or no report — keep the fixture
+}
+
+boot();
 </script>
 </body>
 </html>

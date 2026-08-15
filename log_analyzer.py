@@ -33,6 +33,7 @@ Requirements:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -63,6 +64,26 @@ try:
 except ValueError:
     print(f"ERROR: LLM_TEMPERATURE must be a number, got {os.getenv('LLM_TEMPERATURE')!r}")
     sys.exit(1)
+
+RULESET_VERSION = "v1"
+
+
+def file_sha256(path):
+    """Integrity hash for the run manifest.
+
+    Recomputable by anyone holding the file. This is an INTEGRITY check, not a
+    signature — nothing here attests to who produced the run, and the UI must
+    never present it as if it did.
+    """
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as f:
+            for block in iter(lambda: f.read(65536), b""):
+                h.update(block)
+    except OSError:
+        return None
+    return h.hexdigest()
+
 
 SYSTEM_PROMPT = """You are a SOC/NOC log analyst. You are given a chunk of raw log lines,
 preceded by a list of anomalies already pre-flagged by deterministic rule-based detectors.
@@ -563,6 +584,11 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "model": model,
         "endpoint": base_url,
         "temperature": LLM_TEMPERATURE,
+        "ruleset": RULESET_VERSION,
+        "lines_parsed": stats["parsed"],
+        "lines_unparsed": stats["unparsed"],
+        "input_sha256": file_sha256(path),
+        "detector_sha256": file_sha256(Path(__file__).resolve().parent / "anomaly_detector.py"),
         "total_chunks_analyzed": len(all_chunks),
         "total_findings": len(all_findings),
         "findings_by_source": {
