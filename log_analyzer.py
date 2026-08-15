@@ -48,6 +48,7 @@ from pathlib import Path
 # correlation can run over formats its own regexes were never written for.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import normalize  # noqa: E402
+import rule_context  # noqa: E402
 import rules_syslog  # noqa: E402
 from anomaly_detector import detect, to_llm_context  # noqa: E402
 
@@ -329,6 +330,8 @@ def detector_to_findings(anomalies):
             "source": "detector",
             "entities": a.get("entities", {}),
             "occurrences": a.get("occurrences", 1),
+            "predicate": a.get("predicate", ""),
+            "timeline": a.get("timeline", []),
         })
     return findings
 
@@ -461,6 +464,9 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     raw_anomalies = detect(records) + extra_anomalies
     # Derived from the same record stream v1 just consumed — v1 itself is untouched.
     raw_anomalies = enrich_username_spray(raw_anomalies, records)
+    # Rule predicate + event sequence for the report and the review console.
+    # Deterministic: restated constants and reordered records, no model call.
+    raw_anomalies = rule_context.enrich(raw_anomalies, records)
     anomalies = dedupe_anomalies(raw_anomalies)
     collapsed = len(raw_anomalies) - len(anomalies)
     print(f"Detector: {len(anomalies)} anomaly(ies)"
