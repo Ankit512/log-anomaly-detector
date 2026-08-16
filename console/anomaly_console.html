@@ -1045,7 +1045,14 @@ function detailPane(d) {
 
       <div class="panel explain">
         <div class="panel-k">Plain-language explanation · llama3.1:8b, local</div>
-        <p>${esc(d.explanation)}</p>
+        ${d.explanation ? `<p>${esc(d.explanation)}</p>` : (
+          state.explaining === d.id
+            ? `<p style="color:var(--color-neutral-500)">generating an explanation for this
+                 finding… the rule verdict, evidence and timeline above are already final.</p>`
+            : `<p style="color:var(--color-neutral-500)">Explanation pending — only the most
+                 severe findings are explained up front, so a large log stays fast.
+                 <button class="btn btn-primary" style="margin-left:var(--space-2)"
+                   data-act="explain">Explain this finding</button></p>`)}
       </div>
 
       <div class="ev-head">
@@ -1105,6 +1112,26 @@ function footer() {
 // Behaviour
 // --------------------------------------------------------------------------
 function setState(patch) { Object.assign(state, patch); render(); }
+
+/* Explanations are generated on demand for all but the most severe findings, so
+   opening one asks for its prose. Everything deterministic is already on screen. */
+async function explainCurrent() {
+  const d = current();
+  if (!d || d.explanation || state.explaining === d.id) return;
+  state.explaining = d.id;
+  render();
+  try {
+    const res = await fetch("/api/explain", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: d.id }),
+    });
+    const out = await res.json();
+    if (out && out.explanation) d.explanation = out.explanation;
+    else state.error = (out && out.error) || null;
+  } catch { /* leave it pending; the button can be pressed again */ }
+  state.explaining = null;
+  render();
+}
 
 function toggleCheck(id) {
   setState({ checked: state.checked.includes(id)
@@ -1230,6 +1257,7 @@ document.addEventListener("click", (e) => {
   if (act) {
     switch (act.dataset.act) {
       case "new": return newAnalysis();
+      case "explain": return explainCurrent();
       case "upload": {
         readControls();
         const input = document.getElementById("fileInput");
@@ -1262,7 +1290,10 @@ document.addEventListener("click", (e) => {
   }
 
   const row = t.closest("[data-row]");
-  if (row) setState({ selId: row.dataset.row, copied: false });
+  if (row) {
+    setState({ selId: row.dataset.row, copied: false });
+    if (DATA.live && !current()?.explanation) explainCurrent();
+  }
 });
 
 document.addEventListener("change", (e) => {

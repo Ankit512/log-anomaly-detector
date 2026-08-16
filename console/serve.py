@@ -51,6 +51,8 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
 import adapter  # noqa: E402
+sys.path.insert(0, str(ROOT))
+import log_analyzer as la  # noqa: E402
 
 CONSOLE_HTML = HERE / "anomaly_console.html"
 STATE_FILE = HERE / "console_state.json"        # gitignored; handy for debugging
@@ -237,6 +239,7 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
         state = adapter.adapt(report_json, None)
         state["idle"] = False
         state["partial"] = partial
+        state["logPath"] = str(log_path)
         state["sourceKind"] = source
         state["sourceLabel"] = (value if source in ("sample", "url")
                                 else (filename or "uploaded file"))
@@ -319,6 +322,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._analyze()
         elif path == "/api/progress":
             self._json(job_snapshot())
+        elif path == "/api/explain":
+            self._explain()
         elif path == "/api/reset":
             global STATE
             STATE = {"idle": True}
@@ -374,6 +379,64 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         threading.Thread(target=worker, daemon=True).start()
         # 202: accepted, not finished. The client polls /api/progress.
         return self._json({"status": "running"}, 202)
+
+    def _explain(self):
+        """Explain ONE finding on demand.
+
+        Eager explanations are capped, so most findings arrive with the rule verdict,
+        evidence, predicate and timeline — everything deterministic — and no prose.
+        This generates the prose for a single finding when a reviewer opens it, which
+        is the only moment it is actually needed.
+        """
+        global STATE
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            return self._json({"error": "bad request"}, 400)
+
+        fid = payload.get("id")
+        finding = next((f for f in STATE.get("findings", []) if f.get("id") == fid), None)
+        if not finding:
+            return self._json({"error": "no such finding"}, 404)
+        if finding.get("explanation"):
+            return self._json(finding)                     # already explained
+
+        log_path = Path(STATE.get("logPath", ""))
+        lines = [e.get("line") for e in finding.get("timeline", []) if e.get("line")]
+        if not log_path.exists() or not lines:
+            return self._json({"error": "cannot locate this finding's source lines"}, 409)
+
+        size = 25
+        idx = (max(lines) - 1) // size
+        all_lines = log_path.read_text(errors="replace").splitlines(True)
+        chunk = all_lines[idx * size:(idx + 1) * size]
+
+        ctx = ("Pre-flagged anomalies (from deterministic detectors — treat severities as "
+               "authoritative):\n"
+               f"- [{finding.get('sev')}] {finding.get('type')}: {finding.get('title')}")
+        try:
+            result = la.analyze_chunk(la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL,
+                                      chunk, idx, ctx)
+        except Exception as e:
+            return self._json({"error": f"explanation failed: {e}"}, 500)
+
+        text = ""
+        for ex in result.get("explanations", []):
+            if ex.get("explanation") and (not ex.get("rule_id")
+                                          or ex.get("rule_id") == finding.get("type")):
+                text = ex["explanation"]
+                break
+        if not text:
+            text = "The model returned no explanation for this finding."
+        finding["explanation"] = text
+        finding["explanationOnDemand"] = True
+        try:
+            STATE_FILE.write_text(json.dumps(STATE, indent=2))
+        except OSError:
+            pass
+        print(f"  explained on demand: {fid}", flush=True)
+        return self._json(finding)
 
     def log_message(self, fmt, *args):
         # Format first: log_error() passes (code, message), so indexing args and

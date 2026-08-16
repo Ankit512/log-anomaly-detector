@@ -74,11 +74,18 @@ RULESET_VERSION = "v1"
 # cheap, and is opt-in beyond that via --deep-scan.
 GAP_FILL_MAX_CHUNKS = 4
 
-# Cap the model's reply. Measured output for one chunk is ~176 completion tokens, so
-# this is headroom, not a squeeze: a cap below the real output truncates the JSON,
-# which fails validation, triggers the retry, and costs MORE than it saves. (The
-# briefed 128 would have done exactly that.)
-MAX_COMPLETION_TOKENS = 320
+# No completion cap. Measured: a cap of 320 truncated real explanation replies —
+# sample-2 went from 5 findings with prose to 4 with none — while saving nothing
+# (13.6s vs 13.7s per call, because generation was never the bottleneck; a 1,661-token
+# prompt and model reloads were). A cap that silently empties the report is a bad
+# trade at any speed, so the knob is gone rather than tuned.
+MAX_COMPLETION_TOKENS = None
+
+# Explanations are generated eagerly for only the most severe findings; the rest are
+# produced on demand when a reviewer opens them. Wall time for a run is then bounded
+# by this number, not by the size of the log — a 2,000-line file with 18 findings
+# costs the same first-paint as a 19-line one. Rules still cover every line.
+EAGER_EXPLANATIONS = 3
 
 # Ollama unloads an idle model after ~5 minutes by default, so the first call of a
 # run pays ~9s of load time. Pinning it at preflight removes that from the run.
@@ -268,7 +275,6 @@ def chat_completion(base_url, api_key, model, system, user, timeout=300):
             {"role": "user", "content": user},
         ],
         "temperature": LLM_TEMPERATURE,
-        "max_tokens": MAX_COMPLETION_TOKENS,
         "response_format": {"type": "json_object"},
     }).encode()
 
@@ -599,7 +605,22 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     if run_model:
         finding_chunks = chunks_with_findings(anomalies, lines_per_chunk, len(all_chunks))
         gap_fill = deep_scan or len(all_chunks) <= GAP_FILL_MAX_CHUNKS
-        selected = sorted(range(len(all_chunks)) if gap_fill else finding_chunks)
+        if gap_fill:
+            selected = sorted(range(len(all_chunks)))
+        else:
+            # Only the chunks holding the most severe findings are explained up front.
+            # Everything else is explained when a reviewer actually opens it.
+            top = sorted(anomalies, key=severity_rank)[:EAGER_EXPLANATIONS]
+            # One chunk per finding — the one where it culminates — not every chunk it
+            # touches. A brute-force cluster spans several chunks; explaining all of
+            # them up front triples first-paint for no extra explanation.
+            eager = set()
+            for a in top:
+                lines = finding_line_numbers(a)
+                if lines:
+                    eager.add((max(lines) - 1) // lines_per_chunk)
+            selected = sorted(eager)
+        deferred = sorted(finding_chunks - set(selected))
         # Per-chunk context: only the findings that live IN each chunk. Sending the
         # whole run's context to every chunk made each prompt grow with the number of
         # findings — and asking the model to explain a finding from lines it cannot
@@ -614,6 +635,7 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         empty_ctx = to_llm_context([])
     else:
         gap_fill, selected, chunk_ctx, empty_ctx = False, [], {}, ""
+        deferred = []
 
     if not run_model:
         print(f"Skipping the model: 0 of {stats['total_lines']} line(s) parsed, so no rule "
@@ -628,10 +650,11 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
             print(f"  Explaining all {len(selected)} chunk(s) — {why}, so sub-threshold notes "
                   f"are included.")
         else:
-            print(f"  Explaining {len(selected)} of {len(all_chunks)} chunk(s): only those "
-                  f"containing a rule finding. The detector already read every line.")
-            print(f"  Use --deep-scan to also look for sub-threshold notes in the other "
-                  f"{len(all_chunks) - len(selected)} chunk(s).")
+            print(f"  Explaining {len(selected)} chunk(s) now — the {EAGER_EXPLANATIONS} most "
+                  f"severe finding(s). {len(deferred)} more chunk(s) are explained on demand "
+                  f"when a finding is opened.")
+            print(f"  The detector already read all {len(all_chunks)} chunk(s); "
+                  f"--deep-scan explains everything up front instead.")
 
     # Detector findings are instant; explanations are not. Publish a rules-only report
     # immediately so the console can show real findings in about a second, then
@@ -648,7 +671,9 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
             "input_sha256": file_sha256(path),
             "detector_sha256": file_sha256(Path(__file__).resolve().parent / "anomaly_detector.py"),
             "total_chunks": len(all_chunks), "total_chunks_analyzed": len(selected),
-            "gap_fill": gap_fill, "total_findings": len(early),
+            "gap_fill": gap_fill,
+        "deferred_chunks": list(deferred),
+        "eager_explanations": EAGER_EXPLANATIONS, "total_findings": len(early),
             "findings_by_source": {"detector": len(early), "llm": 0, "analyzer": 0},
             "findings": early, "chunk_summaries": [],
         }, indent=2))
@@ -758,6 +783,8 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "total_chunks": len(all_chunks),
         "total_chunks_analyzed": len(selected),
         "gap_fill": gap_fill,
+        "deferred_chunks": list(deferred),
+        "eager_explanations": EAGER_EXPLANATIONS,
         "total_findings": len(all_findings),
         # An analyzer_error is a failure to analyze, not a contribution. Counting it
         # under "llm" overstated model participation in exactly the runs where the

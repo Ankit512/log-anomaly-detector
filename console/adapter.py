@@ -187,7 +187,10 @@ def adapt(report, threat_report=None):
             "chips": chips,
             "lines": lines,
             "linesNote": lines_note,
+            # `line` is carried through deliberately: on-demand explanation needs to
+            # find the chunk a finding came from, and dropping it silently broke that.
             "timeline": [{"t": e.get("t", ""), "label": e.get("label", ""),
+                          "line": e.get("line"),
                           "dot": SEV_COLOR.get(sev, "#9397ab")} for e in timeline],
         })
 
