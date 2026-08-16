@@ -461,6 +461,11 @@ function fixtureState() {
 // Replaced at bootstrap by live data when a report is being served.
 let DATA = fixtureState();
 
+/* A standalone export inlines its run and has no server: every path that would
+   call one (picker, upload, fetch, run history, on-demand explanation) must be
+   absent rather than present-and-broken. */
+const STANDALONE = typeof window !== "undefined" && window.STANDALONE === true;
+
 const state = {
   // picker / analysis
   sources: null,         // {samples, suggestedUrls} from /api/sources
@@ -542,6 +547,7 @@ function render() {
   document.getElementById("app").innerHTML = [
     header(disagree.length),
     runBar(),
+    STANDALONE ? standaloneBanner() : "",
     state.manifest ? manifestStrip() : "",
     // Independent of finding count. Gating this on an empty list was the bug: a run
     // that parsed nothing but still listed model output read as coverage it never had.
@@ -716,12 +722,13 @@ function runBar() {
         (${DATA.analyzerErrors} chunk(s) not analyzed)</span>` : ""}
     </div>
     <div class="runacts">
-      ${DATA.live ? `<span class="navbtn">
+      ${DATA.live && !STANDALONE ? `<span class="navbtn">
         <button class="btn btn-secondary" data-act="runs">Runs${
           state.runs && state.runs.length ? ` (${state.runs.length})` : ""}</button>
         ${state.showRuns ? runsPanel() : ""}
       </span>` : ""}
-      ${DATA.live ? `<button class="btn btn-secondary" data-act="new">New analysis</button>` : ""}
+      ${DATA.live && !STANDALONE ? `<button class="btn btn-secondary" data-act="new">New analysis</button>` : ""}
+      ${DATA.live && !STANDALONE ? `<button class="btn btn-secondary" data-act="download">Download standalone</button>` : ""}
       <button class="btn btn-secondary" data-act="print">Print report</button>
       <button class="btn btn-primary" data-act="manifest">Run manifest · integrity</button>
     </div>
@@ -731,6 +738,19 @@ function runBar() {
 /* Integrity, not provenance. Every value here is recomputable from files on
    disk with sha256sum; nothing signs the run, so no "signed" or "signature
    valid" claim appears — that would assert an attestation nobody made. */
+function standaloneBanner() {
+  const when = (DATA.generatedAt || "").slice(0, 16).replace("T", " ");
+  return `
+  <div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-6);
+    background:rgba(145,132,217,.10);box-shadow:inset 0 -1px 0 rgba(145,132,217,.30);flex:none;
+    font-size:11.5px;color:var(--color-neutral-400)">
+    <span style="color:var(--color-accent);font-weight:500">Static export</span>
+    <span>of a run generated on ${esc(when)} — open anywhere, no install.</span>
+    <span style="margin-left:auto;font-family:var(--font-mono);color:var(--color-neutral-600)">
+      read-only · no network calls</span>
+  </div>`;
+}
+
 function manifestStrip() {
   const m = DATA.manifest || {};
   const short = (h) => (h ? String(h).slice(0, 16) + "…" : "unavailable");
@@ -1080,7 +1100,12 @@ function detailPane(d) {
           state.explaining === d.id
             ? `<p style="color:var(--color-neutral-500)">generating an explanation for this
                  finding… the rule verdict, evidence and timeline above are already final.</p>`
-            : `<p style="color:var(--color-neutral-500)">Explanation pending — only the most
+            : STANDALONE
+              ? `<p style="color:var(--color-neutral-500)">Explanation available in the
+                   interactive app — this static export carries only the explanations that
+                   were generated when the run was exported. Everything above (severity,
+                   evidence, rule, timeline) is complete.</p>`
+              : `<p style="color:var(--color-neutral-500)">Explanation pending — only the most
                  severe findings are explained up front, so a large log stays fast.
                  <button class="btn btn-primary" style="margin-left:var(--space-2)"
                    data-act="explain">Explain this finding</button></p>`)}
@@ -1166,6 +1191,7 @@ function setState(patch) { Object.assign(state, patch); render(); }
 /* Explanations are generated on demand for all but the most severe findings, so
    opening one asks for its prose. Everything deterministic is already on screen. */
 async function explainCurrent() {
+  if (STANDALONE) return;          // no server to ask
   const d = current();
   if (!d || d.explanation || state.explaining === d.id) return;
   state.explaining = d.id;
@@ -1269,6 +1295,7 @@ function pollProgress() {
 }
 
 function newAnalysis() {
+  if (STANDALONE) return;
   fetch("/api/reset", { method: "POST" }).catch(() => {});
   DATA = { idle: true, live: true, findings: [] };
   state.error = null;
@@ -1278,6 +1305,7 @@ function newAnalysis() {
 }
 
 function loadRuns() {
+  if (STANDALONE) return Promise.resolve();
   return fetch("/api/runs", { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((d) => { if (d) state.runs = d.runs; })
@@ -1285,6 +1313,7 @@ function loadRuns() {
 }
 
 async function openRun(file) {
+  if (STANDALONE) return;
   state.showRuns = false;
   try {
     const res = await fetch("/api/open", {
@@ -1301,6 +1330,7 @@ async function openRun(file) {
 }
 
 function loadSources() {
+  if (STANDALONE) return Promise.resolve();
   return fetch("/api/sources", { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((s) => { if (s) state.sources = s; })
@@ -1340,6 +1370,7 @@ document.addEventListener("click", (e) => {
   const act = t.closest("[data-act]");
   if (act) {
     switch (act.dataset.act) {
+      case "download": return (window.location = "/api/export");
       case "runs": return setState({ showRuns: !state.showRuns });
       case "new": return newAnalysis();
       case "explain": return explainCurrent();

@@ -51,6 +51,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
 import adapter  # noqa: E402
+import export  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 
@@ -362,6 +363,18 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json({"samples": bundled_samples(), "suggestedUrls": SUGGESTED_URLS})
         elif path == "/api/progress":
             self._json(job_snapshot())
+        elif path == "/api/export":
+            if STATE.get("idle"):
+                return self.send_error(409, "nothing to export yet")
+            body = export.build(STATE).encode()
+            name = f"{STATE.get('runId', 'run')}.html".replace("/", "_")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
         elif path == "/api/runs":
             self._json({"runs": list_runs(), "current": STATE.get("runId")})
         else:

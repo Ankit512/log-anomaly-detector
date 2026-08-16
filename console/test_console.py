@@ -214,6 +214,46 @@ console.log("\n0c. run navigation — results outlive a refresh or a restart:");
   check("picker explains why history exists", h.includes("not cost you another analysis"));
 }
 
+console.log("\n0d. standalone export mode (no server exists behind it):");
+{
+  // The export inlines its run and sets STANDALONE. Every server-backed control
+  // must be absent rather than present-and-broken.
+  const withFlag = (pre) => {
+    let out = "";
+    const ctx = {
+      document: { getElementById: () => ({ set innerHTML(v) { out = v; },
+                                           get innerHTML() { return out; } }),
+                  addEventListener: () => {}, activeElement: { tagName: "BODY" } },
+      window: { CONSOLE_DATA: LIVE, STANDALONE: true, print: () => {} },
+      navigator: {},
+      fetch: () => { throw new Error("a standalone export must never call the network"); },
+      console,
+    };
+    vm.createContext(ctx);
+    vm.runInContext(pre ? js.replace("boot();", pre + " boot();") : js, ctx);
+    return out;
+  };
+
+  const h = withFlag();
+  check("renders the run without any fetch", (h.match(/class="row"/g) || []).length === 4);
+  check("static-export banner shown", h.includes("Static export"));
+  check("banner says it opens anywhere", h.includes("open anywhere, no install"));
+  check("banner states no network calls", h.includes("no network calls"));
+  check("'New analysis' removed (no server)", !h.includes('data-act="new"'));
+  check("run navigation removed (no server)", !h.includes('data-act="runs"'));
+  check("download button removed (already downloaded)", !h.includes('data-act="download"'));
+  check("keeps the local-processing cue", h.includes("0 bytes leave this machine"));
+  check("keeps the integrity manifest button", h.includes('data-act="manifest"'));
+
+  // A finding without prose must never offer a button that cannot work.
+  const noProse = clone(LIVE);
+  noProse.findings[0].explanation = "";
+  const h2 = withFlag(`window.CONSOLE_DATA.findings[0].explanation = ""; state.selId = "d0";`);
+  check("unexplained finding has no dead button", !h2.includes('data-act="explain"'));
+  check("points at the interactive app instead",
+        h2.includes("Explanation available in the") || h2.includes("interactive app"));
+}
+
 console.log("\n1. fixture fallback (no data, fetch fails — the file must still open):");
 let { html: h, listeners } = run(null);
 check("renders", h.length > 3000, h.length + " chars");
