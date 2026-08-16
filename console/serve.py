@@ -57,6 +57,12 @@ import log_analyzer as la  # noqa: E402
 CONSOLE_HTML = HERE / "anomaly_console.html"
 STATE_FILE = HERE / "console_state.json"        # gitignored; handy for debugging
 
+# Completed runs are written here so the dashboard survives a refresh, a restart, or
+# a closed laptop. Without this, state lived only in the server process and a restart
+# silently lost work that took minutes to produce.
+RUNS_DIR = HERE / ".runs"
+MAX_RUNS = 25
+
 MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 DOWNLOAD_TIMEOUT = 60
@@ -97,6 +103,51 @@ WORKDIR = None                                   # temp dir for uploads/download
 # ---------------------------------------------------------------------------
 # Sources
 # ---------------------------------------------------------------------------
+
+def save_run(state):
+    """Persist a completed run so it can be reopened later."""
+    RUNS_DIR.mkdir(exist_ok=True)
+    run_id = state.get("runId") or "run"
+    stamp = (state.get("generatedAt") or "").replace(":", "").replace("-", "")[:15]
+    path = RUNS_DIR / f"{stamp}-{run_id}.json".replace("/", "_")
+    try:
+        path.write_text(json.dumps(state))
+    except OSError:
+        return None
+    # Keep the directory bounded; these are whole reports, not log lines.
+    for old in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)[:-MAX_RUNS]:
+        old.unlink(missing_ok=True)
+    return path.name
+
+
+def list_runs():
+    """Saved runs, newest first, as navigation entries."""
+    if not RUNS_DIR.exists():
+        return []
+    out = []
+    for path in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+        try:
+            s = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        out.append({
+            "file": path.name,
+            "runId": s.get("runId", path.stem),
+            "label": s.get("sourceLabel", ""),
+            "generatedAt": s.get("generatedAt", ""),
+            "findings": len(s.get("findings", [])),
+            "unrecognized": bool(s.get("unrecognized")),
+            "compareRun": bool(s.get("compareRun")),
+        })
+    return out
+
+
+def load_run(name):
+    """Reopen a saved run. Name is matched against the index, never joined blindly."""
+    if name not in {r["file"] for r in list_runs()}:
+        raise ValueError("no such run")
+    return json.loads((RUNS_DIR / name).read_text())
+
 
 def bundled_samples():
     """Logs shipped with the repo, as picker entries. Whitelist for `sample`."""
@@ -274,6 +325,7 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
     set_job(phase="rules")
     run_analyzer(log_path, compare, work / "run", on_progress=on_progress)
     state = publish(json.loads(report_path.read_text()), partial=False)
+    save_run(state)
     print(f"  serving run id : {state['runId']}", flush=True)
     return state
 
@@ -310,6 +362,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json({"samples": bundled_samples(), "suggestedUrls": SUGGESTED_URLS})
         elif path == "/api/progress":
             self._json(job_snapshot())
+        elif path == "/api/runs":
+            self._json({"runs": list_runs(), "current": STATE.get("runId")})
         else:
             self.send_error(404, "This server only serves the console, its state, and /api")
 
@@ -322,6 +376,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._analyze()
         elif path == "/api/progress":
             self._json(job_snapshot())
+        elif path == "/api/open":
+            self._open_run()
         elif path == "/api/explain":
             self._explain()
         elif path == "/api/reset":
@@ -379,6 +435,23 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         threading.Thread(target=worker, daemon=True).start()
         # 202: accepted, not finished. The client polls /api/progress.
         return self._json({"status": "running"}, 202)
+
+    def _open_run(self):
+        """Load a saved run back into the dashboard."""
+        global STATE
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            name = json.loads(self.rfile.read(length) or b"{}").get("file")
+            state = load_run(name)
+        except (ValueError, json.JSONDecodeError):
+            return self._json({"error": "no such run"}, 404)
+        STATE = state
+        try:
+            STATE_FILE.write_text(json.dumps(state, indent=2))
+        except OSError:
+            pass
+        print(f"  reopened run: {state.get('runId')}", flush=True)
+        return self._json(state)
 
     def _explain(self):
         """Explain ONE finding on demand.
@@ -580,6 +653,17 @@ def main():
         except Exception as e:
             print(f"\nERROR: {e}")
             sys.exit(1)
+
+        if STATE.get("idle"):
+            # A restart should not throw away a run that took minutes to produce.
+            recent = list_runs()
+            if recent:
+                try:
+                    STATE = load_run(recent[0]["file"])
+                    print(f"  restored the last run: {STATE.get('runId')} "
+                          f"({len(recent)} saved run(s) available)")
+                except (ValueError, json.JSONDecodeError):
+                    pass
 
         url = f"http://127.0.0.1:{args.port}/"
         claim_port(args.port)

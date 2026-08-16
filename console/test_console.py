@@ -187,6 +187,33 @@ console.log("0. log-source picker (serve.py started with no --input):");
 console.log("\n0b. results view offers a way back to the picker:");
 check("'New analysis' button on a live run", run(LIVE).html.includes('data-act="new"'));
 
+console.log("\n0c. run navigation — results outlive a refresh or a restart:");
+{
+  const RUNS = JSON.stringify([
+    { file: "a.json", runId: "sample-2-2026-08-16", label: "sample-2.log", findings: 5,
+      generatedAt: "2026-08-16T14:14:41", compareRun: true, unrecognized: false },
+    { file: "b.json", runId: "Linux_2k-2026-08-16", label: "samples/Linux_2k.log", findings: 27,
+      generatedAt: "2026-08-16T14:17:27", compareRun: false, unrecognized: false },
+  ]);
+  let h = run(LIVE, `state.runs = ${RUNS};`).html;
+  check("nav button shows the saved-run count", h.includes(">Runs (2)<"));
+  check("panel hidden until opened", !h.includes("Saved runs"));
+
+  h = run(LIVE, `state.runs = ${RUNS}; state.showRuns = true;`).html;
+  check("panel lists every saved run", h.includes("sample-2-2026-08-16")
+        && h.includes("Linux_2k-2026-08-16"));
+  check("entries are clickable", h.includes('data-run="a.json"'));
+  check("entries carry finding counts", h.includes("27 finding(s)"));
+  check("compare runs are marked", h.includes("· compare"));
+
+  // The picker offers history too, so a restart lands somewhere useful.
+  const idle = { idle: true, live: true, findings: [] };
+  h = run(idle, `state.sources = {samples:[],suggestedUrls:[]}; state.runs = ${RUNS};`).html;
+  check("picker offers saved runs", h.includes("Reopen a saved run"));
+  // contiguous fragment: the sentence wraps across a newline in the template
+  check("picker explains why history exists", h.includes("not cost you another analysis"));
+}
+
 console.log("\n1. fixture fallback (no data, fetch fails — the file must still open):");
 let { html: h, listeners } = run(null);
 check("renders", h.length > 3000, h.length + " chars");

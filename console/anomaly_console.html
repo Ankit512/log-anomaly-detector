@@ -238,6 +238,22 @@ a:hover{color:var(--color-accent-400)}
 .ftr .local i{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block}
 .ftr .ro{margin-left:auto}
 
+/* — run navigation — */
+.navbtn{position:relative}
+.runs{position:absolute;top:calc(100% + 6px);right:0;z-index:20;width:420px;max-height:60vh;
+  overflow:auto;padding:var(--space-2);border-radius:var(--radius-md);background:var(--color-surface);
+  box-shadow:var(--shadow-md, 0 0 0 1px #595d6c, 0 6px 18px rgba(0,0,0,.55))}
+.runs-k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);
+  padding:var(--space-2) var(--space-3)}
+.run{display:flex;align-items:baseline;gap:var(--space-3);width:100%;padding:var(--space-2) var(--space-3);
+  border:0;border-radius:6px;background:transparent;color:var(--color-text);cursor:pointer;
+  font:inherit;text-align:left}
+.run:hover{background:color-mix(in srgb,var(--color-text) 8%,transparent)}
+.run[data-current="1"]{box-shadow:inset 0 0 0 1px var(--color-accent-600)}
+.run b{font-size:12.5px;font-weight:500}
+.run span{font-size:11px;color:var(--color-neutral-500);font-family:var(--font-mono)}
+.run .when{margin-left:auto;font-size:10.5px;color:var(--color-neutral-600);font-family:var(--font-mono)}
+
 /* ==========================================================================
    Log-source picker
    ========================================================================== */
@@ -448,6 +464,7 @@ let DATA = fixtureState();
 const state = {
   // picker / analysis
   sources: null,         // {samples, suggestedUrls} from /api/sources
+  runs: null, showRuns: false,   // saved-run navigation
   busy: false, busyLabel: "", busyCompare: false,
   compare: false, urlValue: "", error: null,
 
@@ -644,6 +661,15 @@ function renderPicker() {
     </label>
 
     ${state.error ? `<div class="pick-err">${esc(state.error)}</div>` : ""}
+
+    ${(state.runs && state.runs.length) ? `
+    <div class="src" style="margin-top:var(--space-6)">
+      <div class="src-k">Previously</div>
+      <div class="src-t">Reopen a saved run</div>
+      <div class="src-note">Results are kept on this machine, so a refresh or a restart does
+        not cost you another analysis.</div>
+      ${runsPanel().replace('class="runs"', 'class="runs" style="position:static;width:auto;box-shadow:none;padding:0"')}
+    </div>` : ""}
   </div></div>`;
 }
 
@@ -690,6 +716,11 @@ function runBar() {
         (${DATA.analyzerErrors} chunk(s) not analyzed)</span>` : ""}
     </div>
     <div class="runacts">
+      ${DATA.live ? `<span class="navbtn">
+        <button class="btn btn-secondary" data-act="runs">Runs${
+          state.runs && state.runs.length ? ` (${state.runs.length})` : ""}</button>
+        ${state.showRuns ? runsPanel() : ""}
+      </span>` : ""}
       ${DATA.live ? `<button class="btn btn-secondary" data-act="new">New analysis</button>` : ""}
       <button class="btn btn-secondary" data-act="print">Print report</button>
       <button class="btn btn-primary" data-act="manifest">Run manifest · integrity</button>
@@ -1095,6 +1126,25 @@ function detailPane(d) {
   </section>`;
 }
 
+/* Saved runs. Results outlive the page and the server process, so a refresh — or a
+   restart, or coming back tomorrow — reopens what was already analyzed instead of
+   asking for another multi-minute run. */
+function runsPanel() {
+  const runs = state.runs || [];
+  if (!runs.length) return `<div class="runs"><div class="runs-k">No saved runs yet</div></div>`;
+  return `<div class="runs">
+    <div class="runs-k">Saved runs — click to reopen</div>
+    ${runs.map((r) => `
+      <button class="run" data-run="${esc(r.file)}" data-current="${
+        r.runId === DATA.runId ? 1 : 0}">
+        <b>${esc(r.runId)}</b>
+        <span>${r.unrecognized ? "unrecognized" : `${r.findings} finding(s)`}${
+          r.compareRun ? " · compare" : ""}</span>
+        <span class="when">${esc((r.generatedAt || "").slice(5, 16).replace("T", " "))}</span>
+      </button>`).join("")}
+  </div>`;
+}
+
 function footer() {
   const m = DATA.manifest || {};
   const short = (h) => (h ? String(h).slice(0, 8) : "—");
@@ -1213,6 +1263,7 @@ function pollProgress() {
                                     { cache: "no-store" })).json();
     DATA = data;
     state.selId = null;
+    loadRuns().then(render);
     render();
   }, 900);
 }
@@ -1222,6 +1273,30 @@ function newAnalysis() {
   DATA = { idle: true, live: true, findings: [] };
   state.error = null;
   loadSources().then(render);
+  loadRuns().then(render);
+  render();
+}
+
+function loadRuns() {
+  return fetch("/api/runs", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => { if (d) state.runs = d.runs; })
+    .catch(() => {});
+}
+
+async function openRun(file) {
+  state.showRuns = false;
+  try {
+    const res = await fetch("/api/open", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file }),
+    });
+    const data = await res.json();
+    if (data && Array.isArray(data.findings)) {
+      DATA = data;
+      state.selId = null;
+    }
+  } catch { /* keep whatever is on screen */ }
   render();
 }
 
@@ -1234,6 +1309,15 @@ function loadSources() {
 
 document.addEventListener("click", (e) => {
   const t = e.target;
+
+  const runBtn = t.closest("[data-run]");
+  if (runBtn) return openRun(runBtn.dataset.run);
+
+  // Any click outside the panel closes it.
+  if (state.showRuns && !t.closest(".navbtn")) {
+    state.showRuns = false;
+    render();
+  }
 
   const sample = t.closest("[data-sample]");
   if (sample) return analyze({ source: "sample", value: sample.dataset.sample },
@@ -1256,6 +1340,7 @@ document.addEventListener("click", (e) => {
   const act = t.closest("[data-act]");
   if (act) {
     switch (act.dataset.act) {
+      case "runs": return setState({ showRuns: !state.showRuns });
       case "new": return newAnalysis();
       case "explain": return explainCurrent();
       case "upload": {
@@ -1337,6 +1422,7 @@ function boot() {
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       if (!data) return;
+      loadRuns().then(render);
       if (data.idle) {                        // served by the app with no run yet
         DATA = { idle: true, live: true, findings: [] };
         return loadSources().then(render);

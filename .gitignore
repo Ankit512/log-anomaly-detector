@@ -13,3 +13,6 @@ demo_threat_report.*
 
 # adapter output when written next to the console (serve.py keeps it in memory)
 console/console_state.json
+
+# saved run history for the console (local results, machine-specific)
+console/.runs/
