@@ -6,7 +6,7 @@ You do not need to be a programmer to follow this. Every command is written out 
 full, and every screen is described. If you get stuck, jump to
 [Troubleshooting](#12-troubleshooting).
 
-_Last updated: 2026-08-16 · Repo: `~/Projects/log-analyzer`_
+_Last updated: 2026-08-16 · Works on macOS, Linux and Windows_
 
 ---
 
@@ -40,30 +40,48 @@ you see the two disagree on screen, the rule's answer is the one that stands.
 
 You need three things.
 
-**1. Python 3** — already on macOS. Check:
+This tool runs on **macOS, Linux and Windows**.
 
-```bash
-python3 --version
-```
+**1. Python 3.9 or newer**
+
+| Your computer | Check it | If it's missing |
+|---|---|---|
+| macOS | `python3 --version` | Already there; or `brew install python` |
+| Linux | `python3 --version` | `sudo apt install python3` |
+| Windows | `python --version` | [python.org/downloads](https://www.python.org/downloads/) — tick **"Add Python to PATH"** during install |
+
+> **Windows users:** everywhere this guide says `python3`, type `python` instead.
 
 **2. Ollama** — this runs the AI on your own computer.
-Download from <https://ollama.com/download>, then:
+
+Download the installer for your system from <https://ollama.com/download> (macOS, Windows
+and Linux are all supported). On Linux you can instead run:
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+```
+
+Then download the model — about 5 GB, once — and check it worked:
 
 ```bash
 ollama pull llama3.1:8b
-```
-
-That downloads about 5 GB, once. Check it worked:
-
-```bash
 ollama list
 ```
+
+Ollama normally starts by itself after installing. If this tool later says it cannot reach
+the AI, open a second terminal and run `ollama serve`.
+
+**How much memory do I need?** The model needs roughly 8 GB of free RAM. On a 16 GB machine
+close other big apps first — running low on memory is the most common reason analysis feels
+slow.
 
 **3. The project itself:**
 
 ```bash
-cd ~/Projects/log-analyzer
-cp .env.example .env
+cd log-analyzer
+
+cp .env.example .env       # macOS / Linux
+copy .env.example .env     # Windows (Command Prompt)
 ```
 
 `.env` needs no editing for local use — the placeholder API key is deliberate,
@@ -74,7 +92,7 @@ because a local model does not need a real one.
 ## 3. Quick start
 
 ```bash
-cd ~/Projects/log-analyzer
+cd log-analyzer
 python3 console/serve.py
 ```
 
@@ -83,11 +101,15 @@ analyze" screen. Pick **sample-2.log** and wait a few seconds.
 
 That is the whole tool. Everything below is detail.
 
-To stop it, press `Ctrl-C` in the terminal, or:
+To stop it, press **`Ctrl-C`** in the terminal window where it is running. That works on
+every system and is the recommended way.
 
-```bash
-pkill -f console/serve.py
-```
+If you closed the terminal and it is still running:
+
+| System | Command |
+|---|---|
+| macOS / Linux | `pkill -f console/serve.py` |
+| Windows | `taskkill /F /IM python.exe` (stops all Python), or close the window |
 
 ---
 
@@ -277,10 +299,13 @@ generated         2026-08-16T14:14:41
 
 These are **fingerprints you can recompute yourself**:
 
-```bash
-shasum -a 256 sample-2.log
-shasum -a 256 anomaly_detector.py
-```
+| System | Command |
+|---|---|
+| macOS | `shasum -a 256 sample-2.log` |
+| Linux | `sha256sum sample-2.log` |
+| Windows | `certutil -hashfile sample-2.log SHA256` |
+
+Do the same for `anomaly_detector.py` to check the detector's fingerprint.
 
 If the numbers match, the report describes that exact file analyzed by that exact
 detector.
@@ -337,6 +362,24 @@ hostnames.
 
 ---
 
+## 11b. Sharing results with someone who has nothing installed
+
+Click **Download standalone** in the console, or run:
+
+```bash
+python3 console/export.py --latest -o run.html
+```
+
+You get **one HTML file**. Email it, put it in a ticket, or drop it in chat. The person
+opening it needs **no Python, no Ollama, no server and no internet** — they double-click it
+and get the full results screen: findings, severities, evidence, the rule that fired, the
+timeline, the integrity manifest, and working filters.
+
+It is a *results* export, so the picker, upload and "explain this finding" controls are not
+present — there is no server behind it to do that work. A banner at the top says so.
+
+---
+
 ## 12. Troubleshooting
 
 | Symptom | Cause | Fix |
@@ -347,7 +390,9 @@ hostnames.
 | Everything is very slow | Machine is low on memory | Close other apps; 16 GB is tight with a 5 GB model |
 | "Log format not recognized" | Unsupported log format | See §8 — the format needs a parser |
 | "This run is partial" | The AI failed on some chunks | Try `--lines-per-chunk 15` |
-| Port already in use | Another console is running | It reclaims the port itself; if it refuses, the port is held by something else — use `--port 8766` |
+| Port already in use | Another console is running | It reclaims the port itself; if it refuses, something else holds it — use `--port 8766` |
+| `python3: command not found` (Windows) | Windows names it `python` | Use `python` instead of `python3` |
+| `cp: command not found` (Windows) | That is a Unix command | Use `copy .env.example .env` |
 | Browser shows an old run | Should not happen | Refresh; state is sent with no-cache |
 | Analysis seems stuck | Large log | Watch the progress line: `chunk 4 of 23 · 17% · ~5 min left` |
 
@@ -457,8 +502,13 @@ python3 tests/eval/run_eval.py
 python3 threat_intel/test_threat_intel.py
 python3 console/test_console.py
 
+# Share a run with someone who has nothing installed
+python3 console/export.py report.json -o run.html     # one self-contained HTML file
+python3 console/export.py --latest -o run.html        # ...from the most recent run
+
 # Housekeeping
-pkill -f console/serve.py                             # stop the app
+Ctrl-C                                                # stop the app (any system)
+pkill -f console/serve.py                             # macOS / Linux, if detached
 ollama serve                                          # start the AI runtime
 ollama list                                           # what models are installed
 ```

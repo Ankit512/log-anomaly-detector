@@ -538,24 +538,50 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
 # Port ownership
 # ---------------------------------------------------------------------------
 
-def _listeners_on(port):
-    """PIDs actually LISTENing on the port.
+IS_WINDOWS = os.name == "nt"
 
-    `-sTCP:LISTEN` matters: a plain `lsof -ti tcp:PORT` also returns the browser
-    and curl processes holding ESTABLISHED connections, and killing those does
-    nothing to free the port while looking like it did something.
+
+def _listeners_on(port):
+    """PIDs actually LISTENing on the port, on macOS/Linux/Windows.
+
+    `-sTCP:LISTEN` matters on the lsof path: a plain `lsof -ti tcp:PORT` also
+    returns the browser and curl processes holding ESTABLISHED connections, and
+    killing those does nothing to free the port while looking like it did.
+
+    Returns None when the platform's tool is unavailable, so the caller falls
+    through to bind() and reports a clear error rather than guessing.
     """
     try:
+        if IS_WINDOWS:
+            out = subprocess.run(["netstat", "-ano", "-p", "TCP"],
+                                 capture_output=True, text=True).stdout
+            pids = set()
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 5 and parts[3].upper() == "LISTENING" \
+                        and parts[1].endswith(f":{port}"):
+                    if parts[4].isdigit():
+                        pids.add(int(parts[4]))
+            return sorted(pids)
         out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
                              capture_output=True, text=True).stdout
-    except FileNotFoundError:
+    except (FileNotFoundError, OSError):
         return None
     return [int(p) for p in out.split() if p.strip().isdigit()]
 
 
 def _cmdline(pid):
-    return subprocess.run(["ps", "-p", str(pid), "-o", "command="],
-                          capture_output=True, text=True).stdout.strip()
+    """Command line of a process, for the "is this our console?" safety check."""
+    try:
+        if IS_WINDOWS:
+            out = subprocess.run(
+                ["wmic", "process", "where", f"ProcessId={pid}", "get", "CommandLine"],
+                capture_output=True, text=True).stdout
+            return " ".join(out.split("\n")[1:]).strip()
+        return subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                              capture_output=True, text=True).stdout.strip()
+    except (FileNotFoundError, OSError):
+        return ""
 
 
 def _alive(pid):
@@ -584,7 +610,10 @@ def claim_port(port):
             sys.exit(1)
 
         print(f"  reclaiming port {port} from the previous console (pid {pid})")
-        for sig, grace in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 3.0)):
+        signals = [(signal.SIGTERM, 5.0)]
+        if not IS_WINDOWS:
+            signals.append((signal.SIGKILL, 3.0))
+        for sig, grace in signals:
             try:
                 os.kill(pid, sig)
             except (ProcessLookupError, PermissionError):
@@ -621,7 +650,10 @@ def bind(port):
             time.sleep(0.25)
     print(f"\nERROR: could not bind 127.0.0.1:{port} ({last}).")
     print("Refusing to start: a stale console may still be serving the previous run.")
-    print(f"Check with:  lsof -nP -iTCP:{port} -sTCP:LISTEN")
+    hint = (f"netstat -ano | findstr :{port}" if IS_WINDOWS
+            else f"lsof -nP -iTCP:{port} -sTCP:LISTEN")
+    print(f"Check with:  {hint}")
+    print(f"Or start on another port:  python3 console/serve.py --port {port + 1}")
     sys.exit(1)
 
 
