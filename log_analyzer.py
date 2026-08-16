@@ -74,6 +74,16 @@ RULESET_VERSION = "v1"
 # cheap, and is opt-in beyond that via --deep-scan.
 GAP_FILL_MAX_CHUNKS = 4
 
+# Cap the model's reply. Measured output for one chunk is ~176 completion tokens, so
+# this is headroom, not a squeeze: a cap below the real output truncates the JSON,
+# which fails validation, triggers the retry, and costs MORE than it saves. (The
+# briefed 128 would have done exactly that.)
+MAX_COMPLETION_TOKENS = 320
+
+# Ollama unloads an idle model after ~5 minutes by default, so the first call of a
+# run pays ~9s of load time. Pinning it at preflight removes that from the run.
+OLLAMA_KEEP_ALIVE = "30m"
+
 # Machine-readable progress for console/serve.py. Off by default so CLI output stays
 # prose; serve.py sets LOG_ANALYZER_PROGRESS=1 and parses these lines.
 _PROGRESS = os.getenv("LOG_ANALYZER_PROGRESS") == "1"
@@ -258,6 +268,7 @@ def chat_completion(base_url, api_key, model, system, user, timeout=300):
             {"role": "user", "content": user},
         ],
         "temperature": LLM_TEMPERATURE,
+        "max_tokens": MAX_COMPLETION_TOKENS,
         "response_format": {"type": "json_object"},
     }).encode()
 
@@ -514,6 +525,19 @@ def preflight(base_url, api_key, model):
         print("  Local Ollama? Start it with: ollama serve")
         print("  Hosted API? Check LLM_BASE_URL (it should end in /v1).")
         sys.exit(1)
+
+    # Best-effort: ask Ollama to keep the model resident for the run. Ignored by
+    # non-Ollama endpoints, and never fatal — it is a latency optimisation only.
+    try:
+        pin = json.dumps({"model": model, "prompt": "", "keep_alive": OLLAMA_KEEP_ALIVE,
+                          "stream": False}).encode()
+        root = base_url[:-3] if base_url.rstrip("/").endswith("/v1") else base_url
+        req = urllib.request.Request(root.rstrip("/") + "/api/generate", data=pin,
+                                     headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120):
+            pass
+    except Exception:
+        pass
 
     if available and model not in available:
         print(f"WARNING: model '{model}' not listed at {base_url}.")
