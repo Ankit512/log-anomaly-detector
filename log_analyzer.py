@@ -602,9 +602,13 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "detector_sha256": file_sha256(Path(__file__).resolve().parent / "anomaly_detector.py"),
         "total_chunks_analyzed": len(all_chunks),
         "total_findings": len(all_findings),
+        # An analyzer_error is a failure to analyze, not a contribution. Counting it
+        # under "llm" overstated model participation in exactly the runs where the
+        # model produced nothing at all.
         "findings_by_source": {
             "detector": len(detector_findings),
-            "llm": len(llm_findings),
+            "llm": len([f for f in llm_findings if f.get("source") == "llm"]),
+            "analyzer": len([f for f in llm_findings if f.get("source") == "analyzer"]),
         },
         "findings": all_findings,
         "chunk_summaries": chunk_summaries,
@@ -619,8 +623,15 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     md_path = f"{output_prefix}.md"
     write_markdown_report(report, md_path)
 
+    model_count = report["findings_by_source"]["llm"]
+    analyzer_count = report["findings_by_source"]["analyzer"]
+    parts = [f"{len(detector_findings)} from rules"]
+    parts.append(f"{model_count} from the model" if model_count
+                 else "the model contributed none")
+    if analyzer_count:
+        parts.append(f"{analyzer_count} chunk(s) the model could not analyze")
     print(f"\nDone. {len(all_findings)} finding(s) across {len(all_chunks)} chunk(s) "
-          f"({len(detector_findings)} from rules, {len(llm_findings)} from the model).")
+          f"({', '.join(parts)}).")
     print(f"  JSON report: {json_path}")
     print(f"  Markdown report: {md_path}")
 

@@ -236,6 +236,9 @@ def adapt(report, threat_report=None):
         "chunksTotal": (compare or {}).get("chunks_total"),
         "degraded": degraded,
         "analyzerErrors": len(analyzer_errors),
+        # Model findings only — an analyzer_error is a failure, not a contribution.
+        "modelFindings": len([f for f in report.get("findings", [])
+                              if f.get("source") == "llm"]),
         "findings": findings,
     }
 

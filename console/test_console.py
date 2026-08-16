@@ -272,6 +272,17 @@ check("no 'shown as context only' dismissal", !h.includes("Shown as context only
 check("rule card says no rule fired rather than a bare em-dash",
       h.includes("no rule fired") && h.includes("Nothing in the ruleset matched"));
 
+console.log("\n11b. an analyzer failure is not a model contribution:");
+const noModel = clone(LIVE);
+noModel.modelFindings = 0; noModel.analyzerErrors = 2;
+h = run(noModel).html;
+check("run bar says the model contributed nothing", h.includes("contributed no findings"));
+check("names the unanalyzed chunk count", h.includes("2 chunk(s) not analyzed"));
+const withModel = clone(LIVE);
+withModel.modelFindings = 1; withModel.analyzerErrors = 0;
+check("silent when the model did contribute",
+      !run(withModel).html.includes("contributed no findings"));
+
 console.log("\n12. HONEST STATE — 0 parsed is NOT an all-clear:");
 /* Zero findings because nothing was read is not zero findings. Showing the green
    tick here would report a false success on an audit surface. */

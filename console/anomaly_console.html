@@ -516,6 +516,9 @@ function runBar() {
       ${DATA.runWindow ? `<span class="sep">·</span><span>${esc(DATA.runWindow)}</span>` : ""}
       <span class="sep">·</span><span>${esc(DATA.runHosts)}</span>
       <span class="sep">·</span><span>${esc(DATA.runParsed)}</span>
+      ${DATA.live && DATA.modelFindings === 0 && DATA.analyzerErrors > 0 ? `
+      <span class="sep">·</span><span style="color:#d8b45e">the model contributed no findings
+        (${DATA.analyzerErrors} chunk(s) not analyzed)</span>` : ""}
     </div>
     <div class="runacts">
       <button class="btn btn-secondary" data-act="print">Print report</button>
