@@ -237,6 +237,49 @@ a:hover{color:var(--color-accent-400)}
 .ftr .local{display:flex;align-items:center;gap:6px;color:var(--color-neutral-400)}
 .ftr .local i{width:6px;height:6px;border-radius:50%;background:var(--ok);display:block}
 .ftr .ro{margin-left:auto}
+
+/* ==========================================================================
+   Log-source picker
+   ========================================================================== */
+.pick{flex:1;overflow:auto;padding:var(--space-8) var(--space-8) 56px;display:flex;
+  flex-direction:column;align-items:center}
+.pick-in{width:100%;max-width:760px}
+.pick-h{font-size:23px;margin:0 0 var(--space-2)}
+.pick-sub{font-size:13px;color:var(--color-neutral-500);margin:0 0 var(--space-8);text-wrap:pretty}
+.src{padding:var(--space-6);border-radius:var(--radius-md);background:var(--color-surface);
+  box-shadow:var(--shadow-sm);margin-bottom:var(--space-4)}
+.src-k{font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--color-neutral-600);
+  margin-bottom:var(--space-2)}
+.src-t{font-size:15px;font-weight:500;margin-bottom:var(--space-1)}
+.src-note{font-size:11.5px;color:var(--color-neutral-500);margin-bottom:var(--space-4);text-wrap:pretty}
+.src-row{display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:center}
+.samp{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:var(--space-3) var(--space-4);
+  border-radius:var(--radius-md);border:1px solid var(--color-divider);background:transparent;
+  color:var(--color-text);cursor:pointer;font:inherit;text-align:left}
+.samp:hover{background:color-mix(in srgb,var(--color-text) 7%,transparent);border-color:var(--color-accent)}
+.samp b{font-size:13px;font-weight:500}
+.samp span{font-size:11px;color:var(--color-neutral-500);font-family:var(--font-mono)}
+
+/* The network source is visually separated on purpose: it is the only one that
+   leaves this machine, and that should be obvious before it is clicked. */
+.src-net{background:rgba(35,37,50,.5);box-shadow:inset 0 0 0 1px rgba(216,180,94,.30)}
+.src-net .src-k{color:#d8b45e}
+.chip-url{padding:4px 10px;border-radius:6px;font-size:11.5px;cursor:pointer;font:inherit;font-size:11.5px;
+  background:transparent;color:var(--color-neutral-400);border:1px solid var(--color-divider)}
+.chip-url:hover{border-color:var(--color-accent);color:var(--color-accent)}
+
+.pick-opt{display:flex;align-items:center;gap:var(--space-2);margin:var(--space-6) 0 var(--space-2);
+  font-size:13px;color:var(--color-neutral-400)}
+.pick-opt input{width:15px;height:15px;accent-color:var(--color-accent-500);cursor:pointer}
+.pick-err{margin-top:var(--space-4);padding:var(--space-3) var(--space-4);border-radius:var(--radius-md);
+  border:1px solid #7a3c3c;background:rgba(122,60,60,.16);font-size:12.5px;color:#e2807f}
+.busy{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:var(--space-4);
+  flex:1;padding:var(--space-8);text-align:center}
+.busy-t{font-size:17px;font-weight:500}
+.busy-b{font-size:12.5px;color:var(--color-neutral-500);max-width:460px;text-wrap:pretty}
+.spinner{width:26px;height:26px;border-radius:50%;border:2px solid var(--color-neutral-800);
+  border-top-color:var(--color-accent);animation:spin 0.9s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 </style>
 </head>
 <body>
@@ -403,6 +446,11 @@ function fixtureState() {
 let DATA = fixtureState();
 
 const state = {
+  // picker / analysis
+  sources: null,         // {samples, suggestedUrls} from /api/sources
+  busy: false, busyLabel: "", busyCompare: false,
+  compare: false, urlValue: "", error: null,
+
   view: "incident",      // demo-only: incident | partial | clear
   filter: "all",         // all | dis | llm | open
   selId: null,
@@ -463,7 +511,13 @@ const esc = (s) => String(s == null ? "" : s)
 // --------------------------------------------------------------------------
 // Render
 // --------------------------------------------------------------------------
+/* The app has three screens: pick a log, wait for it, review it. */
+const isIdle = () => DATA.idle === true;
+
 function render() {
+  if (state.busy) return renderBusy();
+  if (isIdle()) return renderPicker();
+
   const list = visible();
   const cur = current();
   const disagree = all().filter(underrated);
@@ -479,6 +533,89 @@ function render() {
     `<div class="body">${listPane(list, cur, disagree.length)}${detailPane(cur)}</div>`,
     footer()
   ].join("");
+}
+
+function pickerHeader() {
+  return `
+  <header class="hdr">
+    <div class="brand"><b>itsoc</b><span>local log anomaly review</span></div>
+    <div class="pill pill-local">
+      <span class="dot-live"></span><span>processed locally · 0 bytes leave this machine</span>
+    </div>
+  </header>`;
+}
+
+function renderBusy() {
+  document.getElementById("app").innerHTML = `
+  ${pickerHeader()}
+  <div class="busy">
+    <div class="spinner"></div>
+    <div class="busy-t">Analyzing ${esc(state.busyLabel || "the log")}…</div>
+    <div class="busy-b">Rules run over every line first, then the local model explains what
+      they found${state.busyCompare ? ", and a second unprimed pass records what the model would "
+      + "have rated each finding on its own" : ""}. On a long log this takes a few minutes —
+      the model runs on this machine.</div>
+  </div>`;
+}
+
+function renderPicker() {
+  const s = state.sources || { samples: [], suggestedUrls: [] };
+  const samples = s.samples.map((f) => `
+    <button class="samp" data-sample="${esc(f.value)}">
+      <b>${esc(f.name)}</b><span>${f.lines.toLocaleString()} lines</span>
+    </button>`).join("");
+  const chips = (s.suggestedUrls || []).map((u) => `
+    <button class="chip-url" data-suggest="${esc(u.url)}">${esc(u.label)}</button>`).join("");
+
+  document.getElementById("app").innerHTML = `
+  ${pickerHeader()}
+  <div class="pick"><div class="pick-in">
+    <h3 class="pick-h">Choose a log to analyze</h3>
+    <p class="pick-sub">Deterministic rules decide severity; the local model explains what they
+      found. Nothing is uploaded — the only source that uses the network downloads public test
+      data <em>to</em> you.</p>
+
+    <div class="src">
+      <div class="src-k">Bundled</div>
+      <div class="src-t">Samples in this repo</div>
+      <div class="src-note">Known-good formats — the quickest way to see what the console does.</div>
+      <div class="src-row">${samples || "<span class='src-note'>none found</span>"}</div>
+    </div>
+
+    <div class="src">
+      <div class="src-k">Your machine</div>
+      <div class="src-t">Analyze a local file</div>
+      <div class="src-note">Read locally — your log never leaves this machine. It is copied to a
+        temporary file, analyzed, and discarded when the console stops.</div>
+      <div class="src-row">
+        <input type="file" id="fileInput" class="input" style="width:auto;min-width:280px">
+        <button class="btn btn-primary" data-act="upload">Analyze file</button>
+      </div>
+    </div>
+
+    <div class="src src-net">
+      <div class="src-k">Network · public test data only</div>
+      <div class="src-t">Fetch a log from a URL</div>
+      <div class="src-note">This is the one source that uses the network: it <strong>downloads</strong>
+        public test data to this machine. Your own logs are never uploaded, and the analysis still
+        runs locally.</div>
+      <div class="src-row" style="margin-bottom:var(--space-3)">
+        <input type="text" id="urlInput" class="input" style="flex:1;min-width:320px"
+               placeholder="https://raw.githubusercontent.com/logpai/loghub/…/OpenSSH_2k.log"
+               value="${esc(state.urlValue || "")}">
+        <button class="btn btn-secondary" data-act="fetch">Fetch &amp; analyze</button>
+      </div>
+      <div class="src-row">${chips}</div>
+    </div>
+
+    <label class="pick-opt">
+      <input type="checkbox" id="cmpInput" ${state.compare ? "checked" : ""}>
+      Run compare (LLM-alone) — a second unprimed pass that records what the model would rate
+      each finding without the rules. Doubles inference time.
+    </label>
+
+    ${state.error ? `<div class="pick-err">${esc(state.error)}</div>` : ""}
+  </div></div>`;
 }
 
 function header(underratedCount) {
@@ -524,6 +661,7 @@ function runBar() {
         (${DATA.analyzerErrors} chunk(s) not analyzed)</span>` : ""}
     </div>
     <div class="runacts">
+      ${DATA.live ? `<button class="btn btn-secondary" data-act="new">New analysis</button>` : ""}
       <button class="btn btn-secondary" data-act="print">Print report</button>
       <button class="btn btn-primary" data-act="manifest">Run manifest · integrity</button>
     </div>
@@ -961,8 +1099,70 @@ function copyEvidence() {
   setState({ copied: true });
 }
 
+/* ---- picker actions ------------------------------------------------------ */
+
+function readControls() {
+  const cmp = document.getElementById("cmpInput");
+  if (cmp) state.compare = cmp.checked;
+  const url = document.getElementById("urlInput");
+  if (url) state.urlValue = url.value;
+}
+
+async function analyze(body, label, isForm) {
+  readControls();
+  state.busy = true; state.busyLabel = label; state.busyCompare = state.compare;
+  state.error = null;
+  render();
+  try {
+    const res = await fetch("/api/analyze", isForm
+      ? { method: "POST", body }
+      : { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...body, compare: state.compare }) });
+    const data = await res.json();
+    state.busy = false;
+    if (!res.ok || data.error) {
+      state.error = data.error || `analysis failed (HTTP ${res.status})`;
+      return render();
+    }
+    DATA = data;
+    state.selId = null;
+    render();
+  } catch (err) {
+    state.busy = false;
+    state.error = `could not reach the console server: ${err.message}`;
+    render();
+  }
+}
+
+function newAnalysis() {
+  fetch("/api/reset", { method: "POST" }).catch(() => {});
+  DATA = { idle: true, live: true, findings: [] };
+  state.error = null;
+  loadSources().then(render);
+  render();
+}
+
+function loadSources() {
+  return fetch("/api/sources", { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((s) => { if (s) state.sources = s; })
+    .catch(() => {});
+}
+
 document.addEventListener("click", (e) => {
   const t = e.target;
+
+  const sample = t.closest("[data-sample]");
+  if (sample) return analyze({ source: "sample", value: sample.dataset.sample },
+                             sample.dataset.sample, false);
+
+  const suggest = t.closest("[data-suggest]");
+  if (suggest) {
+    const input = document.getElementById("urlInput");
+    if (input) input.value = suggest.dataset.suggest;
+    state.urlValue = suggest.dataset.suggest;
+    return;
+  }
 
   const check = t.closest("[data-check]");
   if (check) { e.stopPropagation(); toggleCheck(check.dataset.check); return; }
@@ -973,6 +1173,23 @@ document.addEventListener("click", (e) => {
   const act = t.closest("[data-act]");
   if (act) {
     switch (act.dataset.act) {
+      case "new": return newAnalysis();
+      case "upload": {
+        readControls();
+        const input = document.getElementById("fileInput");
+        const file = input && input.files && input.files[0];
+        if (!file) { state.error = "Choose a file first."; return render(); }
+        const form = new FormData();
+        form.append("file", file);
+        form.append("compare", state.compare ? "1" : "0");
+        return analyze(form, file.name, true);
+      }
+      case "fetch": {
+        readControls();
+        if (!state.urlValue.trim()) { state.error = "Paste a URL first."; return render(); }
+        return analyze({ source: "url", value: state.urlValue.trim() },
+                       state.urlValue.trim(), false);
+      }
       case "manifest": return setState({ manifest: !state.manifest });
       case "print": return window.print();
       case "copy": return copyEvidence();
@@ -1032,13 +1249,18 @@ function boot() {
   fetch(`./console_state.json?t=${Date.now()}`, { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
-      if (data && Array.isArray(data.findings)) {
+      if (!data) return;
+      if (data.idle) {                        // served by the app with no run yet
+        DATA = { idle: true, live: true, findings: [] };
+        return loadSources().then(render);
+      }
+      if (Array.isArray(data.findings)) {
         DATA = data;
         state.selId = null;
         render();
       }
     })
-    .catch(() => {});                          // file:// or no report — keep the fixture
+    .catch(() => {});                          // file:// or no server — keep the fixture
 }
 
 boot();

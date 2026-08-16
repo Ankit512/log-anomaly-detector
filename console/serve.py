@@ -1,39 +1,48 @@
 #!/usr/bin/env python3
 """
-serve.py — run the analyzer (or read an existing report) and serve the console.
+serve.py — the local review app: pick a log, analyze it, review the findings.
 
-One command from the repo root:
+    python3 console/serve.py                      # opens the picker
+    python3 console/serve.py --input sample-2.log --compare   # analyze immediately
 
-    python3 console/serve.py --input sample-2.log --compare
-    python3 console/serve.py --report demo_report.json
-    python3 console/serve.py --report demo_report.json --threat-intel demo_threat_report.json
+Then use http://127.0.0.1:8765/ — the same URL for every run.
 
-Then open the printed http://127.0.0.1:8765/ address.
+Three log sources, and the difference between them matters:
 
-The port is fixed (override with --port) and a previous serve.py holding it is
-replaced, so re-running always serves the NEW run at the SAME URL — refresh the tab
-you already have open. State is sent no-store and fetched with a cache-buster, so a
-refresh can never show you the previous run.
+  bundled   files already in this repo (samples/ + sample-2.log)
+  upload    a file from your machine — read locally, never sent anywhere
+  url       PUBLIC test data fetched over the network, e.g. LogHub. This is the
+            only source that touches the network, and it downloads *to* you; your
+            own logs are never uploaded. The UI keeps it visually separate for
+            exactly that reason.
 
-Read-only and local by construction:
+Local and read-only by construction:
   - binds 127.0.0.1 only, never 0.0.0.0
-  - serves GET/HEAD; every other method is refused
-  - serves exactly two files from console/, nothing else on disk
-  - runs the analyzer as a subprocess with the same flags you would type
+  - GET serves the console and its state; POST /api/analyze is the only write-ish
+    route, and all it does is run the analyzer over a log you chose
+  - the analyzer itself never touches the systems that produced the log
+  - the port is reclaimed from a previous instance on start, so a refresh can
+    never show you a stale run
 
-Stdlib only.
+Stdlib only. (cgi is gone in 3.13, so multipart is parsed with email.parser.)
 """
 
 import argparse
 import http.server
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import webbrowser
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -43,21 +52,256 @@ sys.path.insert(0, str(HERE))
 import adapter  # noqa: E402
 
 CONSOLE_HTML = HERE / "anomaly_console.html"
+STATE_FILE = HERE / "console_state.json"        # gitignored; handy for debugging
+
+MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
+DOWNLOAD_TIMEOUT = 60
+
+# Public log corpora, offered as one-click chips. Nothing is fetched until asked.
+SUGGESTED_URLS = [
+    {"label": "LogHub · OpenSSH (2k lines)",
+     "url": "https://raw.githubusercontent.com/logpai/loghub/master/OpenSSH/OpenSSH_2k.log"},
+    {"label": "LogHub · Linux (2k lines)",
+     "url": "https://raw.githubusercontent.com/logpai/loghub/master/Linux/Linux_2k.log"},
+    {"label": "LogHub · Apache (2k lines)",
+     "url": "https://raw.githubusercontent.com/logpai/loghub/master/Apache/Apache_2k.log"},
+]
+
+# Mutable app state: what the console is currently showing.
+STATE = {"idle": True}
+WORKDIR = None                                   # temp dir for uploads/downloads
 
 
-def run_analyzer(input_path, compare, out_prefix, extra_args):
+# ---------------------------------------------------------------------------
+# Sources
+# ---------------------------------------------------------------------------
+
+def bundled_samples():
+    """Logs shipped with the repo, as picker entries. Whitelist for `sample`."""
+    out = []
+    for path in [ROOT / "sample-2.log", *sorted((ROOT / "samples").glob("*.log"))]:
+        if not path.exists():
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        try:
+            lines = sum(1 for _ in path.open(errors="replace"))
+        except OSError:
+            continue
+        out.append({"value": rel, "name": path.name, "lines": lines,
+                    "bytes": path.stat().st_size})
+    return out
+
+
+def resolve_sample(value):
+    """Map a picker value to a real path, refusing anything not on the whitelist.
+
+    The whitelist is the point: this endpoint takes a string from a browser, and
+    joining it onto a path would let any file on the machine be read back through
+    the console.
+    """
+    allowed = {s["value"] for s in bundled_samples()}
+    if value not in allowed:
+        raise ValueError(f"not a bundled sample: {value!r}")
+    return ROOT / value
+
+
+def fetch_url(url, dest_dir):
+    """Download PUBLIC test data to a temp file. Never uploads anything."""
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("only http(s) URLs can be fetched")
+    if not parsed.netloc:
+        raise ValueError("that does not look like a URL")
+
+    req = urllib.request.Request(url, headers={"User-Agent": "log-analyzer-console/1.0"})
+    with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
+        data = resp.read(MAX_DOWNLOAD_BYTES + 1)
+    if len(data) > MAX_DOWNLOAD_BYTES:
+        raise ValueError(f"file is larger than {MAX_DOWNLOAD_BYTES // (1024 * 1024)}MB")
+    if not data.strip():
+        raise ValueError("the URL returned an empty file")
+
+    name = Path(urllib.parse.unquote(parsed.path)).name or "downloaded.log"
+    dest = Path(dest_dir) / name
+    dest.write_bytes(data)
+    return dest
+
+
+def save_upload(filename, data, dest_dir):
+    """Write an uploaded file to the temp dir. It never leaves this machine."""
+    if not data:
+        raise ValueError("the uploaded file was empty")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise ValueError(f"file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)}MB")
+    safe = Path(filename or "uploaded.log").name or "uploaded.log"
+    dest = Path(dest_dir) / safe
+    dest.write_bytes(data)
+    return dest
+
+
+def parse_multipart(body, content_type):
+    """Minimal multipart/form-data reader (cgi was removed in Python 3.13)."""
+    raw = b"Content-Type: " + content_type.encode() + b"\r\nMIME-Version: 1.0\r\n\r\n" + body
+    msg = BytesParser(policy=policy.default).parsebytes(raw)
+    fields = {}
+    if not msg.is_multipart():
+        return fields
+    for part in msg.iter_parts():
+        name = part.get_param("name", header="content-disposition")
+        if not name:
+            continue
+        fields[name] = (part.get_filename(), part.get_payload(decode=True))
+    return fields
+
+
+# ---------------------------------------------------------------------------
+# Analysis
+# ---------------------------------------------------------------------------
+
+def run_analyzer(input_path, compare, out_prefix, extra_args=()):
     cmd = [sys.executable, str(ROOT / "log_analyzer.py"),
            "--input", str(input_path), "--output", str(out_prefix)]
     if compare:
         cmd.append("--compare")
-    cmd += extra_args
-    print(f"$ {' '.join(cmd)}\n")
-    result = subprocess.run(cmd, cwd=ROOT)
+    cmd += list(extra_args)
+    print(f"\n$ {' '.join(cmd)}", flush=True)
+    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
+    print(result.stdout.rstrip(), flush=True)
     if result.returncode != 0:
-        print(f"\nERROR: the analyzer exited {result.returncode}; nothing to serve.")
-        sys.exit(result.returncode)
+        raise RuntimeError((result.stderr or result.stdout or "").strip()[-600:]
+                           or f"analyzer exited {result.returncode}")
     return Path(f"{out_prefix}.json")
 
+
+def analyze(source, value, compare, filename=None, data=None, threat_intel=None):
+    """Resolve a source to a file, analyze it, and become the console's state."""
+    global STATE
+    work = Path(tempfile.mkdtemp(prefix="analysis-", dir=WORKDIR))
+
+    if source == "sample":
+        log_path = resolve_sample(value)
+    elif source == "url":
+        log_path = fetch_url(value, work)
+    elif source == "upload":
+        log_path = save_upload(filename, data, work)
+    else:
+        raise ValueError(f"unknown source {source!r}")
+
+    report_path = run_analyzer(log_path, compare, work / "run")
+    report = json.loads(report_path.read_text())
+    threat = json.loads(Path(threat_intel).read_text()) if threat_intel else None
+
+    state = adapter.adapt(report, threat)
+    state["idle"] = False
+    state["sourceKind"] = source
+    state["sourceLabel"] = (value if source in ("sample", "url") else (filename or "uploaded file"))
+    STATE = state
+    try:
+        STATE_FILE.write_text(json.dumps(state, indent=2))
+    except OSError:
+        pass                                     # debugging aid only, never fatal
+    print(f"  serving run id : {state['runId']}", flush=True)
+    return state
+
+
+# ---------------------------------------------------------------------------
+# HTTP
+# ---------------------------------------------------------------------------
+
+class ConsoleHandler(http.server.BaseHTTPRequestHandler):
+    """Serves the console, its state, and the analyze endpoint. Nothing else."""
+
+    protocol_version = "HTTP/1.1"
+
+    def _send(self, body, content_type, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _json(self, obj, status=200):
+        self._send(json.dumps(obj).encode(), "application/json; charset=utf-8", status)
+
+    def do_GET(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path in ("/", "/index.html", "/anomaly_console.html"):
+            self._send(CONSOLE_HTML.read_bytes(), "text/html; charset=utf-8")
+        elif path == "/console_state.json":
+            self._json(STATE)
+        elif path == "/api/sources":
+            self._json({"samples": bundled_samples(), "suggestedUrls": SUGGESTED_URLS})
+        else:
+            self.send_error(404, "This server only serves the console, its state, and /api")
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_POST(self):
+        path = urllib.parse.urlparse(self.path).path
+        if path == "/api/analyze":
+            self._analyze()
+        elif path == "/api/reset":
+            global STATE
+            STATE = {"idle": True}
+            self._json(STATE)
+        else:
+            self.send_error(405, "This console only accepts POST /api/analyze")
+
+    do_PUT = do_DELETE = do_PATCH = lambda self: self.send_error(405, "read-only")
+
+    def _analyze(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_UPLOAD_BYTES:
+            return self._json({"error": "file too large"}, 413)
+        body = self.rfile.read(length) if length else b""
+        ctype = self.headers.get("Content-Type", "")
+
+        try:
+            if ctype.startswith("multipart/form-data"):
+                fields = parse_multipart(body, ctype)
+                filename, data = fields.get("file", (None, None))
+                source = "upload"
+                value = filename
+                compare = (fields.get("compare", (None, b""))[1] or b"") in (b"1", b"true", b"on")
+            else:
+                payload = json.loads(body or b"{}")
+                source = payload.get("source")
+                value = payload.get("value")
+                compare = bool(payload.get("compare"))
+                filename = data = None
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._json({"error": f"could not read the request: {e}"}, 400)
+
+        print(f"\n  analyze: source={source} value={str(value)[:70]!r} compare={compare}",
+              flush=True)
+        try:
+            state = analyze(source, value, compare, filename=filename, data=data)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+        except urllib.error.URLError as e:
+            return self._json({"error": f"could not fetch that URL: {e.reason}"}, 502)
+        except Exception as e:                    # analyzer failure — report, do not crash
+            return self._json({"error": f"analysis failed: {e}"}, 500)
+        return self._json(state)
+
+    def log_message(self, fmt, *args):
+        # Format first: log_error() passes (code, message), so indexing args and
+        # assuming a string crashed the handler thread on every 404/405 — which
+        # surfaced as an empty reply rather than the status code we meant to send.
+        msg = fmt % args
+        if "/console_state.json" in msg:
+            return                                # poll noise
+        print(f"  {self.address_string()} {msg}", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Port ownership
+# ---------------------------------------------------------------------------
 
 def _listeners_on(port):
     """PIDs actually LISTENing on the port.
@@ -65,8 +309,6 @@ def _listeners_on(port):
     `-sTCP:LISTEN` matters: a plain `lsof -ti tcp:PORT` also returns the browser
     and curl processes holding ESTABLISHED connections, and killing those does
     nothing to free the port while looking like it did something.
-
-    Returns None when lsof is unavailable, so the caller can fall back to bind.
     """
     try:
         out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
@@ -90,20 +332,10 @@ def _alive(pid):
 
 
 def claim_port(port):
-    """Make the new run win the port, or fail loudly. Never serve stale data.
-
-    An analyst keeps one tab open and refreshes it. If a previous serve.py keeps
-    the port, that tab silently shows the PREVIOUS run — the worst failure mode
-    for a review surface, because a stale answer looks exactly like a fresh one.
-    So: take the port, verify it was taken, and if it cannot be taken, exit rather
-    than leave the old server answering.
-
-    Only ever terminates a process whose command line names this script. Anything
-    else on the port is a foreign service, and killing it is not ours to do.
-    """
+    """Make the new run win the port, or fail loudly. Never serve stale data."""
     pids = _listeners_on(port)
     if pids is None:
-        return                       # no lsof; bind() reports failure loudly
+        return
     pids = [p for p in pids if p != os.getpid()]
     if not pids:
         return
@@ -132,11 +364,9 @@ def claim_port(port):
             print("Refusing to start: the old run would keep serving stale data.")
             sys.exit(1)
 
-    # Confirm the port is genuinely free before claiming success.
     deadline = time.monotonic() + 5.0
     while time.monotonic() < deadline:
-        remaining = _listeners_on(port) or []
-        if not [p for p in remaining if p != os.getpid()]:
+        if not [p for p in (_listeners_on(port) or []) if p != os.getpid()]:
             return
         time.sleep(0.1)
     print(f"\nERROR: port {port} is still held after terminating the previous console.")
@@ -146,118 +376,88 @@ def claim_port(port):
 
 def bind(port):
     """Bind, retrying briefly through TIME_WAIT. Loud failure, never a traceback."""
-    http.server.HTTPServer.allow_reuse_address = True
+    http.server.ThreadingHTTPServer.allow_reuse_address = True
     last = None
     for _ in range(20):
         try:
-            return http.server.HTTPServer(("127.0.0.1", port), ConsoleHandler)
+            return http.server.ThreadingHTTPServer(("127.0.0.1", port), ConsoleHandler)
         except OSError as e:
             last = e
             time.sleep(0.25)
     print(f"\nERROR: could not bind 127.0.0.1:{port} ({last}).")
     print("Refusing to start: a stale console may still be serving the previous run.")
-    print("Check with:  lsof -nP -iTCP:%d -sTCP:LISTEN" % port)
+    print(f"Check with:  lsof -nP -iTCP:{port} -sTCP:LISTEN")
     sys.exit(1)
 
 
-class ConsoleHandler(http.server.BaseHTTPRequestHandler):
-    """Serves the console and its state. No filesystem traversal, no writes."""
-
-    state_json = b"{}"
-
-    def _send(self, body, content_type):
-        self.send_response(200)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
-        self.send_header("Pragma", "no-cache")
-        self.send_header("Expires", "0")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        path = self.path.split("?")[0]
-        if path in ("/", "/index.html", "/anomaly_console.html"):
-            self._send(CONSOLE_HTML.read_bytes(), "text/html; charset=utf-8")
-        elif path == "/console_state.json":
-            self._send(self.state_json, "application/json; charset=utf-8")
-        else:
-            self.send_error(404, "This server only serves the console and its state")
-
-    def do_HEAD(self):
-        self.do_GET()
-
-    def _refuse(self):
-        self.send_error(405, "This console is read-only")
-
-    do_POST = do_PUT = do_DELETE = do_PATCH = _refuse
-
-    def log_message(self, fmt, *args):
-        print(f"  {self.address_string()} {fmt % args}")
-
-
 def main():
-    ap = argparse.ArgumentParser(description="Serve the anomaly console against a real run")
-    src = ap.add_mutually_exclusive_group(required=True)
-    src.add_argument("--input", help="Log file to analyze, then serve")
-    src.add_argument("--report", help="Existing analyzer report.json to serve")
+    global WORKDIR
+    ap = argparse.ArgumentParser(description="Local review console for the log analyzer")
+    ap.add_argument("--input", help="Analyze this log immediately instead of showing the picker")
+    ap.add_argument("--report", help="Serve an existing analyzer report.json")
     ap.add_argument("--compare", action="store_true",
                     help="With --input: also run the unprimed LLM-alone pass")
     ap.add_argument("--threat-intel", default=None,
                     help="Optional threat_detector.py report.json, for MITRE chips")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--no-open", action="store_true", help="Do not open a browser")
-    ap.add_argument("analyzer_args", nargs="*",
-                    help="Extra args passed through to log_analyzer.py")
     args = ap.parse_args()
 
+    global STATE
     with tempfile.TemporaryDirectory(prefix="anomaly-console-") as tmp:
-        if args.input:
-            report_path = run_analyzer(args.input, args.compare,
-                                       Path(tmp) / "run", args.analyzer_args)
-        else:
-            report_path = Path(args.report)
-            if not report_path.exists():
-                print(f"ERROR: report not found: {report_path}")
-                sys.exit(1)
-
-        report = json.loads(report_path.read_text())
-        threat = (json.loads(Path(args.threat_intel).read_text())
-                  if args.threat_intel else None)
-        state = adapter.adapt(report, threat)
-        ConsoleHandler.state_json = json.dumps(state).encode()
-
-        n = len(state["findings"])
-        print(f"\n  {n} finding(s) · {state['runParsed']}")
-        if state["compareRun"]:
-            print(f"  compare: {state['underratedCount']} under-rated "
-                  f"({state['chunksUsable']}/{state['chunksTotal']} chunks usable)")
-        else:
-            print("  compare: not run — the under-rated pill will say so rather than show 0")
-        if state["degraded"] or state["analyzerErrors"]:
-            print("  partial run: some chunks had no usable model output")
+        WORKDIR = tmp
+        try:
+            if args.report:
+                report = json.loads(Path(args.report).read_text())
+                threat = (json.loads(Path(args.threat_intel).read_text())
+                          if args.threat_intel else None)
+                STATE = adapter.adapt(report, threat)
+                STATE["idle"] = False
+                STATE["sourceKind"] = "report"
+                STATE["sourceLabel"] = args.report
+            elif args.input:
+                # --input accepts any path, unlike the picker's `sample` source: this
+                # one came from the user's own shell, not from a browser request, so
+                # the whitelist that protects the HTTP endpoint does not apply.
+                work = Path(tempfile.mkdtemp(prefix="analysis-", dir=WORKDIR))
+                report_path = run_analyzer(Path(args.input), args.compare, work / "run")
+                report = json.loads(report_path.read_text())
+                threat = (json.loads(Path(args.threat_intel).read_text())
+                          if args.threat_intel else None)
+                STATE = adapter.adapt(report, threat)
+                STATE["idle"] = False
+                STATE["sourceKind"] = "cli"
+                STATE["sourceLabel"] = args.input
+        except Exception as e:
+            print(f"\nERROR: {e}")
+            sys.exit(1)
 
         url = f"http://127.0.0.1:{args.port}/"
         claim_port(args.port)
         server = bind(args.port)
 
-        # The terminal and the page must name the SAME run, so a stale tab is
-        # identifiable at a glance instead of being indistinguishable from a fresh one.
-        line = f"  Console: {url}   run: {state['runId']}"
+        run_id = "picker (no analysis yet)" if STATE.get("idle") else STATE["runId"]
+        line = f"  Console: {url}   run: {run_id}"
         bar = "─" * (len(line) + 2)
         print(f"\n┌{bar}┐")
         print(f"│{line}  │")
         print(f"└{bar}┘")
-        print(f"  serving run id : {state['runId']}")
-        print(f"  generated at   : {state.get('generatedAt', '')[:19]}")
+        if STATE.get("idle"):
+            print("  Choose a log in the browser: bundled sample, local file, or public URL.")
+        else:
+            print(f"  serving run id : {STATE['runId']}")
+            print(f"  generated at   : {STATE.get('generatedAt', '')[:19]}")
         print("  Re-running serve.py replaces this run at the same URL — just refresh.")
         print("  Ctrl-C to stop.\n", flush=True)
+
         if not args.no_open:
             webbrowser.open(url)
         try:
             server.serve_forever()
         except KeyboardInterrupt:
             print("\n  stopped.")
+        finally:
+            shutil.rmtree(STATE_FILE.parent / "__pycache__", ignore_errors=True)
 
 
 if __name__ == "__main__":

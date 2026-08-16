@@ -142,7 +142,42 @@ function run(consoleData, pre) {
 const rows = (h) => (h.match(/class="row"/g) || []).length;
 const clone = (o) => JSON.parse(JSON.stringify(o));
 
-console.log("1. fixture fallback (no data, fetch fails — the file must still open):");
+console.log("0. log-source picker (serve.py started with no --input):");
+{
+  const idle = { idle: true, live: true, findings: [] };
+  const withSources = (pre) => run(idle, `state.sources = ${JSON.stringify({
+    samples: [{ value: "sample-2.log", name: "sample-2.log", lines: 19, bytes: 1576 },
+              { value: "samples/OpenSSH_2k.log", name: "OpenSSH_2k.log", lines: 2000, bytes: 1 }],
+    suggestedUrls: [{ label: "LogHub · OpenSSH (2k lines)", url: "https://example/OpenSSH_2k.log" }]
+  })}; ${pre || ""}`).html;
+
+  let p = withSources();
+  check("renders the picker, not a findings list", p.includes("Choose a log to analyze"));
+  check("(a) bundled samples listed as buttons", p.includes('data-sample="sample-2.log"'));
+  check("(a) shows sample line counts", p.includes("19 lines"));
+  check("(b) local file input present", p.includes('id="fileInput"') && p.includes('data-act="upload"'));
+  check("(b) states the file never leaves the machine",
+        p.includes("never leaves this machine"));
+  check("(c) URL field + fetch action", p.includes('id="urlInput"') && p.includes('data-act="fetch"'));
+  check("(c) suggested LogHub chips", p.includes("data-suggest="));
+  check("(c) network source is visually separated", p.includes("src-net"));
+  check("(c) says it downloads public data and uploads nothing",
+        p.includes("downloads</strong>") && p.includes("never uploaded"));
+  check("compare checkbox offered", p.includes('id="cmpInput"'));
+  check("no findings table on the picker", (p.match(/class="row"/g) || []).length === 0);
+
+  p = withSources('state.error = "could not fetch that URL: timed out";');
+  check("surfaces analysis errors on the picker", p.includes("could not fetch that URL"));
+
+  p = withSources('state.busy = true; state.busyLabel = "OpenSSH_2k.log";');
+  check("busy screen while analyzing", p.includes("Analyzing OpenSSH_2k.log"));
+  check("busy screen explains the wait", p.includes("takes a few minutes"));
+}
+
+console.log("\n0b. results view offers a way back to the picker:");
+check("'New analysis' button on a live run", run(LIVE).html.includes('data-act="new"'));
+
+console.log("\n1. fixture fallback (no data, fetch fails — the file must still open):");
 let { html: h, listeners } = run(null);
 check("renders", h.length > 3000, h.length + " chars");
 check("demo run-state switcher present", h.includes('name="runview"'));
@@ -341,6 +376,68 @@ def extract_js(html_path):
     return m.group(1)
 
 
+def check_server_routing():
+    """Python-side checks on serve.py: source resolution and the route table.
+
+    No sockets, no analyzer, no network — these exercise the pure functions that
+    decide what a browser request is allowed to reach.
+    """
+    sys.path.insert(0, str(HERE))
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nserve.py routing and source resolution:")
+
+    samples = serve.bundled_samples()
+    check("bundled samples discovered", len(samples) >= 1, f"{len(samples)} found")
+    check("sample-2.log is offered", any(s["value"] == "sample-2.log" for s in samples))
+    check("samples carry line counts", all(s["lines"] > 0 for s in samples))
+
+    # The whitelist is the security boundary for a browser-supplied string.
+    for bad in ("../../../etc/passwd", "/etc/passwd", "samples/../log_analyzer.py", ""):
+        try:
+            serve.resolve_sample(bad)
+            check(f"rejects {bad!r}", False, "it was accepted")
+        except ValueError:
+            check(f"rejects {bad!r}", True)
+    try:
+        serve.resolve_sample("sample-2.log")
+        check("accepts a real bundled sample", True)
+    except ValueError as e:
+        check("accepts a real bundled sample", False, str(e))
+
+    for bad in ("file:///etc/passwd", "ftp://host/x.log", "not-a-url", "javascript:alert(1)"):
+        try:
+            serve.fetch_url(bad, "/tmp")
+            check(f"refuses to fetch {bad!r}", False, "it was accepted")
+        except ValueError:
+            check(f"refuses to fetch {bad!r}", True)
+        except Exception:
+            check(f"refuses to fetch {bad!r}", True)   # network never reached
+
+    handler = serve.ConsoleHandler
+    check("GET routes exist", all(hasattr(handler, m) for m in ("do_GET", "do_HEAD")))
+    check("POST route exists (analyze is the only write-ish action)", hasattr(handler, "do_POST"))
+    for method in ("do_PUT", "do_DELETE", "do_PATCH"):
+        check(f"{method} refused", hasattr(handler, method))
+
+    body = (b'--X\r\nContent-Disposition: form-data; name="file"; filename="a.log"\r\n\r\n'
+            b'2026-08-13T02:16:44Z WARN h auth failed\r\n--X\r\n'
+            b'Content-Disposition: form-data; name="compare"\r\n\r\n1\r\n--X--\r\n')
+    fields = serve.parse_multipart(body, 'multipart/form-data; boundary=X')
+    check("multipart upload parses (cgi is gone in 3.13)",
+          fields.get("file", (None, None))[0] == "a.log"
+          and b"auth failed" in (fields.get("file", (None, b""))[1] or b""))
+    check("multipart non-file fields parse", fields.get("compare", (None, b""))[1] == b"1")
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -375,7 +472,13 @@ def main():
         print(result.stdout.rstrip())
         if result.stderr.strip():
             print(result.stderr.strip()[:800])
-        return result.returncode
+
+    routing = check_server_routing()
+    if result.returncode or routing:
+        print("\nFAILED")
+        return 1
+    print("\nPASSED — render + routing checks green")
+    return 0
 
 
 if __name__ == "__main__":
