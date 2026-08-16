@@ -1000,7 +1000,9 @@ function boot() {
     return;
   }
   render();                                   // fixture first, so it never blanks
-  fetch("./console_state.json", { cache: "no-store" })
+  // Cache-busted: re-running serve.py replaces the run at the same URL, and a
+  // refresh that served a cached state would silently show the previous run.
+  fetch(`./console_state.json?t=${Date.now()}`, { cache: "no-store" })
     .then((r) => (r.ok ? r.json() : null))
     .then((data) => {
       if (data && Array.isArray(data.findings)) {

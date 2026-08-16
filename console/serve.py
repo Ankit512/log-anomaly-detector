@@ -10,6 +10,11 @@ One command from the repo root:
 
 Then open the printed http://127.0.0.1:8765/ address.
 
+The port is fixed (override with --port) and a previous serve.py holding it is
+replaced, so re-running always serves the NEW run at the SAME URL — refresh the tab
+you already have open. State is sent no-store and fetched with a cache-buster, so a
+refresh can never show you the previous run.
+
 Read-only and local by construction:
   - binds 127.0.0.1 only, never 0.0.0.0
   - serves GET/HEAD; every other method is refused
@@ -22,9 +27,12 @@ Stdlib only.
 import argparse
 import http.server
 import json
+import os
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import webbrowser
 from pathlib import Path
 
@@ -51,6 +59,37 @@ def run_analyzer(input_path, compare, out_prefix, extra_args):
     return Path(f"{out_prefix}.json")
 
 
+def free_the_port(port):
+    """Take the port back from a previous serve.py so re-runs reuse the same URL.
+
+    An analyst keeps one tab open. If every run bound a new port, that tab would
+    keep showing a stale run while the new one sat somewhere else — the worst
+    failure mode for a review surface, because nothing looks wrong.
+
+    Only ever kills a process whose command line contains this script's name;
+    anything else holding the port is reported and left alone.
+    """
+    try:
+        pids = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
+                              capture_output=True, text=True).stdout.split()
+    except FileNotFoundError:
+        return                      # no lsof: fall through to the bind error
+    for pid in pids:
+        cmd = subprocess.run(["ps", "-p", pid, "-o", "command="],
+                             capture_output=True, text=True).stdout.strip()
+        if "serve.py" not in cmd:
+            print(f"  port {port} is held by something that is not this console "
+                  f"(pid {pid}): {cmd[:60]}")
+            continue
+        print(f"  replacing the previous console on port {port} (pid {pid})")
+        try:
+            os.kill(int(pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+    if pids:
+        time.sleep(0.6)             # let the socket clear before rebinding
+
+
 class ConsoleHandler(http.server.BaseHTTPRequestHandler):
     """Serves the console and its state. No filesystem traversal, no writes."""
 
@@ -60,7 +99,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
         self.end_headers()
         self.wfile.write(body)
 
@@ -127,8 +168,15 @@ def main():
             print("  partial run: some chunks had no usable model output")
 
         url = f"http://127.0.0.1:{args.port}/"
+        free_the_port(args.port)
+        http.server.HTTPServer.allow_reuse_address = True
         server = http.server.HTTPServer(("127.0.0.1", args.port), ConsoleHandler)
-        print(f"\n  Console: {url}    (Ctrl-C to stop)\n")
+        bar = "─" * (len(url) + 18)
+        print(f"\n  ┌{bar}┐")
+        print(f"  │   Console:  {url}   │")
+        print(f"  └{bar}┘")
+        print("  Re-running serve.py replaces this run at the same URL — just refresh.")
+        print("  Ctrl-C to stop.\n", flush=True)
         if not args.no_open:
             webbrowser.open(url)
         try:
