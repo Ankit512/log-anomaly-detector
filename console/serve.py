@@ -59,35 +59,105 @@ def run_analyzer(input_path, compare, out_prefix, extra_args):
     return Path(f"{out_prefix}.json")
 
 
-def free_the_port(port):
-    """Take the port back from a previous serve.py so re-runs reuse the same URL.
+def _listeners_on(port):
+    """PIDs actually LISTENing on the port.
 
-    An analyst keeps one tab open. If every run bound a new port, that tab would
-    keep showing a stale run while the new one sat somewhere else — the worst
-    failure mode for a review surface, because nothing looks wrong.
+    `-sTCP:LISTEN` matters: a plain `lsof -ti tcp:PORT` also returns the browser
+    and curl processes holding ESTABLISHED connections, and killing those does
+    nothing to free the port while looking like it did something.
 
-    Only ever kills a process whose command line contains this script's name;
-    anything else holding the port is reported and left alone.
+    Returns None when lsof is unavailable, so the caller can fall back to bind.
     """
     try:
-        pids = subprocess.run(["lsof", "-ti", f"tcp:{port}"],
-                              capture_output=True, text=True).stdout.split()
+        out = subprocess.run(["lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-t"],
+                             capture_output=True, text=True).stdout
     except FileNotFoundError:
-        return                      # no lsof: fall through to the bind error
+        return None
+    return [int(p) for p in out.split() if p.strip().isdigit()]
+
+
+def _cmdline(pid):
+    return subprocess.run(["ps", "-p", str(pid), "-o", "command="],
+                          capture_output=True, text=True).stdout.strip()
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def claim_port(port):
+    """Make the new run win the port, or fail loudly. Never serve stale data.
+
+    An analyst keeps one tab open and refreshes it. If a previous serve.py keeps
+    the port, that tab silently shows the PREVIOUS run — the worst failure mode
+    for a review surface, because a stale answer looks exactly like a fresh one.
+    So: take the port, verify it was taken, and if it cannot be taken, exit rather
+    than leave the old server answering.
+
+    Only ever terminates a process whose command line names this script. Anything
+    else on the port is a foreign service, and killing it is not ours to do.
+    """
+    pids = _listeners_on(port)
+    if pids is None:
+        return                       # no lsof; bind() reports failure loudly
+    pids = [p for p in pids if p != os.getpid()]
+    if not pids:
+        return
+
     for pid in pids:
-        cmd = subprocess.run(["ps", "-p", pid, "-o", "command="],
-                             capture_output=True, text=True).stdout.strip()
+        cmd = _cmdline(pid)
         if "serve.py" not in cmd:
-            print(f"  port {port} is held by something that is not this console "
-                  f"(pid {pid}): {cmd[:60]}")
-            continue
-        print(f"  replacing the previous console on port {port} (pid {pid})")
+            print(f"\nERROR: port {port} is held by a process that is not this console "
+                  f"(pid {pid}):\n  {cmd[:120]}")
+            print("Refusing to kill it. Free the port, or pass --port <other>.")
+            sys.exit(1)
+
+        print(f"  reclaiming port {port} from the previous console (pid {pid})")
+        for sig, grace in ((signal.SIGTERM, 5.0), (signal.SIGKILL, 3.0)):
+            try:
+                os.kill(pid, sig)
+            except (ProcessLookupError, PermissionError):
+                break
+            deadline = time.monotonic() + grace
+            while time.monotonic() < deadline and _alive(pid):
+                time.sleep(0.1)
+            if not _alive(pid):
+                break
+        if _alive(pid):
+            print(f"\nERROR: could not stop the previous console (pid {pid}) on port {port}.")
+            print("Refusing to start: the old run would keep serving stale data.")
+            sys.exit(1)
+
+    # Confirm the port is genuinely free before claiming success.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        remaining = _listeners_on(port) or []
+        if not [p for p in remaining if p != os.getpid()]:
+            return
+        time.sleep(0.1)
+    print(f"\nERROR: port {port} is still held after terminating the previous console.")
+    print("Refusing to start rather than leave a stale run being served.")
+    sys.exit(1)
+
+
+def bind(port):
+    """Bind, retrying briefly through TIME_WAIT. Loud failure, never a traceback."""
+    http.server.HTTPServer.allow_reuse_address = True
+    last = None
+    for _ in range(20):
         try:
-            os.kill(int(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, ValueError):
-            pass
-    if pids:
-        time.sleep(0.6)             # let the socket clear before rebinding
+            return http.server.HTTPServer(("127.0.0.1", port), ConsoleHandler)
+        except OSError as e:
+            last = e
+            time.sleep(0.25)
+    print(f"\nERROR: could not bind 127.0.0.1:{port} ({last}).")
+    print("Refusing to start: a stale console may still be serving the previous run.")
+    print("Check with:  lsof -nP -iTCP:%d -sTCP:LISTEN" % port)
+    sys.exit(1)
 
 
 class ConsoleHandler(http.server.BaseHTTPRequestHandler):
@@ -168,13 +238,18 @@ def main():
             print("  partial run: some chunks had no usable model output")
 
         url = f"http://127.0.0.1:{args.port}/"
-        free_the_port(args.port)
-        http.server.HTTPServer.allow_reuse_address = True
-        server = http.server.HTTPServer(("127.0.0.1", args.port), ConsoleHandler)
-        bar = "─" * (len(url) + 18)
-        print(f"\n  ┌{bar}┐")
-        print(f"  │   Console:  {url}   │")
-        print(f"  └{bar}┘")
+        claim_port(args.port)
+        server = bind(args.port)
+
+        # The terminal and the page must name the SAME run, so a stale tab is
+        # identifiable at a glance instead of being indistinguishable from a fresh one.
+        line = f"  Console: {url}   run: {state['runId']}"
+        bar = "─" * (len(line) + 2)
+        print(f"\n┌{bar}┐")
+        print(f"│{line}  │")
+        print(f"└{bar}┘")
+        print(f"  serving run id : {state['runId']}")
+        print(f"  generated at   : {state.get('generatedAt', '')[:19]}")
         print("  Re-running serve.py replaces this run at the same URL — just refresh.")
         print("  Ctrl-C to stop.\n", flush=True)
         if not args.no_open:
