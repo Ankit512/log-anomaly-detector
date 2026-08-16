@@ -87,6 +87,13 @@ def check_assertions(case, findings, meta, all_results):
             if hits:
                 failures.append(f"{a['type']} must not fire, but did: {hits}")
 
+        elif kind == "parse_stats":
+            # Rejection is behaviour too: an unparseable input must report what it
+            # could not read rather than crash or quietly return nothing.
+            for key in ("format", "parsed", "unparsed"):
+                if key in a and meta.get(key) != a[key]:
+                    failures.append(f"{key} = {meta.get(key)!r}, expected {a[key]!r}")
+
         elif kind == "auth_event_count":
             if meta["auth_events"] != a["expected"]:
                 failures.append(

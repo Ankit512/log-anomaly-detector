@@ -112,6 +112,25 @@
     },
 
     {
+      "id": "N7",
+      "file": "cases/neg_unrecognized_format.log",
+      "description": "macOS unified-log lines — a format this project cannot parse. Must degrade to 0 parsed / N unparsed with no crash and no findings, never a silent success.",
+      "expected": [],
+      "assertions": [
+        {"kind": "parse_stats", "format": "unknown", "parsed": 0, "unparsed": 11}
+      ]
+    },
+    {
+      "id": "N8",
+      "file": "cases/neg_empty.log",
+      "description": "empty file — must not crash and must report nothing parsed",
+      "expected": [],
+      "assertions": [
+        {"kind": "parse_stats", "format": "empty", "parsed": 0, "unparsed": 0}
+      ]
+    },
+
+    {
       "id": "F1",
       "file": "cases/fmt_bruteforce_canonical.log",
       "description": "6 attempts written in canonical phrasing (1 line each)",

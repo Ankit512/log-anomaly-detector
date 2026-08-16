@@ -179,6 +179,12 @@ def load(path):
     path = Path(path)
     fmt = sniff_format(path)
 
+    # Set before the branches: only the rfc3164 path infers a year, but every path
+    # reports one. Leaving this to the branches meant an unknown or empty input
+    # raised UnboundLocalError instead of returning "0 parsed, N unparsed" — the
+    # graceful-degradation path existed but could never execute.
+    base_year = None
+
     if fmt == "canonical":
         # Delegate to v1 so canonical logs behave exactly as they always have.
         records = ad.parse_lines(path)
@@ -187,7 +193,6 @@ def load(path):
         unparsed = [(n, line.rstrip("\n"))
                     for n, line in enumerate(open(path, errors="replace"), start=1)
                     if line.strip() and n not in matched]
-        base_year = None
     elif fmt == "rfc3164":
         year, mtime_month = infer_base_year(path)
         first_month = _first_month(path)

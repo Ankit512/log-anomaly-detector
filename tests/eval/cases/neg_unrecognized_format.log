@@ -1,0 +1,11 @@
+2026-08-16 00:11:42.139637+0100  localhost kernel[0]: (MTP) 	SET rid:0xA0(1B)
+2026-08-16 00:11:42.139640+0100  localhost kernel[0]: (MTP) 	p: 01 00 CD D0 70 B3 BB 30 7E F0 5D
+2026-08-16 00:11:42.340823+0100  localhost nsurlsessiond[641]: [com.apple.nsurlsessiond:background] Triggering periodic update to powerlog for client <private>
+2026-08-16 00:11:42.446789+0100  localhost kernel[0]: (com.apple.DriverKit-AppleBCMWLAN.dext) 375795.547785 wlan0.E[705562] [wcl] checkTrafficCounters@2686:realTime before<0> -> after<0>,  realTimeNumPackets =<3> inactive before<0> -> after<0>,  infraNumPackets =<48> statsIntervalMultiplier=<5>
+2026-08-16 00:11:42.446890+0100  localhost kernel[0]: (com.apple.DriverKit-AppleBCMWLAN.dext) 375795.547891 wlan0.E[705563] [wcl] computeAdvisoryScores@666:LQM-WiFi: WiFi Latency: TxLat-hist  [2(100 %) / 0(0 %) / 0(0 %) / 0(0 %)]	RxLat-hist	[0(0 %) / 0(0 %) / 0(0 %) / 0(0 %)]
+2026-08-16 00:11:42.447854+0100  localhost airportd[452]: (IO80211) [com.apple.WiFiManager:] Driver Event: <airport[452]> _bsd_80211_event_callback: APPLE80211_M_REALTIME_SESSION_NOTIFICATION/156 (en0)
+2026-08-16 00:11:42.447963+0100  localhost airportd[452]: (IO80211) [com.apple.WiFiManager:] Info: <airport[452]> 11ax ASR session: new-state = 0x0
+2026-08-16 00:11:42.447993+0100  localhost airportd[452]: (IO80211) [com.apple.WiFiManager:] Info: <airport[452]> airportdProcessRealtimeSessionNotificationEvent channel score: chq = 4, tx-lat = 5, rx-lat = 3, tx-loss = 5, rx-loss = 5, p95-lat = 2, RT = 0x0, link-reco = 0x0
+2026-08-16 00:11:42.492401+0100  localhost kernel[0]: (com.apple.DriverKit-AppleBCMWLAN.dext) wlan0:com.apple.p2p.awdl0: isInfraRealtimePacketThresholdAllowed allowed:1 option:32 threshold:50 noRegistrations:1 cachedPeerCount:0 fastDiscoveryInactive:1 fastDiscoveryOnSince:217277601
+2026-08-16 00:11:42.492421+0100  localhost kernel[0]: (com.apple.DriverKit-AppleBCMWLAN.dext) wlan0:com.apple.p2p.awdl0: currentInfraTrafficType:9273 checking if realtime upgrade required with inputPackets:2 outputPackets:1 packetThreshold:50
+2026-08-16 00:11:42.569658+0100  localhost airportd[452]: (IO80211) [com.apple.WiFiManager:] Driver Event: <airport[452]> _bsd_80211_event_callback: APPLE80211_M_WEIGHT_AVG_LQM_UPDATE/145 (en0)
