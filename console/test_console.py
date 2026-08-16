@@ -298,6 +298,19 @@ check("does NOT render the green all-clear", !h.includes("All clear — 0 anomal
 check("no success tick", !h.includes(">✓<"));
 check("detail pane says nothing was analyzed", h.includes("Nothing was analyzed"));
 
+/* The bug this guards: the caution used to live inside the empty-list renderer, so a
+   run that parsed nothing but still listed model output showed a normal findings list
+   and no warning at all — coverage the run never had. */
+const unrecWithFindings = clone(LIVE);
+unrecWithFindings.linesParsed = 0; unrecWithFindings.linesUnparsed = 100;
+unrecWithFindings.unrecognized = true; unrecWithFindings.emptyInput = false;
+h = run(unrecWithFindings).html;
+check("warning shows even WITH findings listed", h.includes("Log format not recognized"));
+check("says it is not evidence the log is clean", h.includes("not</strong> evidence"));
+check("names the unvalidated items", h.includes("not rule-backed"));
+check("findings still render (not hidden, just qualified)",
+      rows(h) === LIVE.findings.length, rows(h) + " rows");
+
 const emptyIn = clone(LIVE);
 emptyIn.findings = []; emptyIn.linesParsed = 0; emptyIn.linesUnparsed = 0;
 emptyIn.unrecognized = false; emptyIn.emptyInput = true;

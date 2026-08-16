@@ -68,6 +68,20 @@ except ValueError:
 RULESET_VERSION = "v1"
 
 
+def should_run_model(stats):
+    """Run the LLM pass only when the parser actually structured something.
+
+    When 0 lines parse, no rule has evaluated anything, so there is nothing for the
+    model to explain and nothing to check its output against. Running it anyway
+    produces unvalidated guesses over text we cannot read — measured on a macOS
+    unified log, that was 21 spurious LOW findings about routine OS events, which
+    then read on the console as coverage the run never had.
+
+    Rules-first is the thesis: no structure, no analysis. Say so instead.
+    """
+    return stats.get("parsed", 0) > 0
+
+
 def file_sha256(path):
     """Integrity hash for the run manifest.
 
@@ -505,13 +519,21 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
           + (f" ({collapsed} duplicate(s) collapsed)" if collapsed else ""))
     ctx = to_llm_context(anomalies)
 
-    all_chunks = list(chunk_log_file(path, lines_per_chunk))
-    print(f"Loaded {path.name} — {len(all_chunks)} chunk(s) of ~{lines_per_chunk} lines each")
-    print(f"Model: {model} (via {base_url})")
+    run_model = should_run_model(stats)
+    all_chunks = list(chunk_log_file(path, lines_per_chunk)) if run_model else []
 
     llm_findings = []
     chunk_summaries = []
     explanations = {}
+
+    if not run_model:
+        print(f"Skipping the model: 0 of {stats['total_lines']} line(s) parsed, so no rule "
+              f"evaluated anything.")
+        print("  Analyzing unparseable text would be guesswork with nothing to check it "
+              "against — reporting 'format not recognized' instead.")
+    else:
+        print(f"Loaded {path.name} — {len(all_chunks)} chunk(s) of ~{lines_per_chunk} lines each")
+        print(f"Model: {model} (via {base_url})")
 
     for idx, (start_line, chunk_lines) in enumerate(all_chunks):
         print(f"  Analyzing chunk {idx + 1}/{len(all_chunks)} (lines {start_line}-{start_line + len(chunk_lines)})...")
@@ -553,7 +575,10 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     # Strictly additive. Runs a SECOND, unprimed pass over the same chunks and
     # annotates the detector findings; it never touches their severities.
     compare_stats = None
-    if compare:
+    if compare and not run_model:
+        print("Compare mode skipped: nothing was parsed, so there is no rule verdict to "
+              "compare the model against.")
+    if compare and run_model:
         import compare as compare_mod
         print("Compare mode: second unprimed pass (no rules, no pre-flags)...")
 

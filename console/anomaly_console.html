@@ -472,6 +472,9 @@ function render() {
     header(disagree.length),
     runBar(),
     state.manifest ? manifestStrip() : "",
+    // Independent of finding count. Gating this on an empty list was the bug: a run
+    // that parsed nothing but still listed model output read as coverage it never had.
+    (isUnrecognized() || isEmptyInput()) ? unrecognizedBanner() : "",
     isPartial() ? partialWarning() : "",
     `<div class="body">${listPane(list, cur, disagree.length)}${detailPane(cur)}</div>`,
     footer()
@@ -704,6 +707,27 @@ function emptyList() {
     <div class="empty-mark">✓</div>
     <div class="empty-t">${clear ? "All clear — 0 anomalies" : "Nothing matches this filter"}</div>
     <div class="empty-b">${clear ? body : "Clear the filter to see the rest of this run's findings."}</div>
+  </div>`;
+}
+
+/* Top-of-run warning. Shown whenever 0 lines parsed, however many findings the run
+   happens to contain, because "we could not read this file" outranks anything below. */
+function unrecognizedBanner() {
+  const total = (DATA.linesParsed || 0) + (DATA.linesUnparsed || 0);
+  const extra = DATA.findings.length
+    ? ` This run still lists ${DATA.findings.length} item(s); they are not rule-backed and
+        nothing here has been validated against a parsed log.`
+    : "";
+  return `
+  <div class="warn">
+    <span class="warn-bar"></span>
+    <div>
+      <div class="warn-t">${isEmptyInput()
+        ? "Nothing to analyze — the input is empty"
+        : `Log format not recognized — 0 of ${total.toLocaleString()} lines parsed`}</div>
+      <div class="warn-b">No rule evaluated a single line, so this run is
+        <strong>not</strong> evidence that the log is clean.${esc(extra)}</div>
+    </div>
   </div>`;
 }
 

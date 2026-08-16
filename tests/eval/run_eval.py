@@ -87,6 +87,18 @@ def check_assertions(case, findings, meta, all_results):
             if hits:
                 failures.append(f"{a['type']} must not fire, but did: {hits}")
 
+        elif kind == "model_skipped":
+            # An unparseable log must not reach the model at all: with no rule
+            # verdicts there is nothing to explain and nothing to check output
+            # against, and listing model guesses reads as coverage the run lacked.
+            import log_analyzer  # local: keeps the model config out of import time
+            stats = {"parsed": meta["parsed"], "total_lines": meta["parsed"] + meta["unparsed"]}
+            actual = log_analyzer.should_run_model(stats)
+            if actual is not (not a.get("expected", True)):
+                failures.append(
+                    f"should_run_model returned {actual}, expected "
+                    f"{not a.get('expected', True)}")
+
         elif kind == "parse_stats":
             # Rejection is behaviour too: an unparseable input must report what it
             # could not read rather than crash or quietly return nothing.
