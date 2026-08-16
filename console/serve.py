@@ -36,6 +36,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -70,6 +71,24 @@ SUGGESTED_URLS = [
 
 # Mutable app state: what the console is currently showing.
 STATE = {"idle": True}
+
+# The analyzer can run for minutes. It runs on a worker thread and reports
+# progress here, so /api/analyze returns immediately and the browser can show
+# what is happening instead of hanging on an open request.
+JOB = {"status": "idle"}
+JOB_LOCK = threading.Lock()
+
+
+def set_job(**fields):
+    with JOB_LOCK:
+        JOB.update(fields)
+
+
+def job_snapshot():
+    with JOB_LOCK:
+        return dict(JOB)
+
+
 WORKDIR = None                                   # temp dir for uploads/downloads
 
 
@@ -159,25 +178,47 @@ def parse_multipart(body, content_type):
 # Analysis
 # ---------------------------------------------------------------------------
 
-def run_analyzer(input_path, compare, out_prefix, extra_args=()):
+def run_analyzer(input_path, compare, out_prefix, extra_args=(), on_progress=None):
+    """Run the analyzer, streaming its progress lines instead of blocking silently."""
     cmd = [sys.executable, str(ROOT / "log_analyzer.py"),
            "--input", str(input_path), "--output", str(out_prefix)]
     if compare:
         cmd.append("--compare")
     cmd += list(extra_args)
     print(f"\n$ {' '.join(cmd)}", flush=True)
-    result = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True)
-    print(result.stdout.rstrip(), flush=True)
-    if result.returncode != 0:
-        raise RuntimeError((result.stderr or result.stdout or "").strip()[-600:]
-                           or f"analyzer exited {result.returncode}")
+
+    env = dict(os.environ, LOG_ANALYZER_PROGRESS="1", PYTHONUNBUFFERED="1")
+    proc = subprocess.Popen(cmd, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, bufsize=1)
+    tail = []
+    # iter(readline) not `for line in proc.stdout`: the latter uses a read-ahead
+    # buffer, which delays progress lines by thousands of bytes — long enough that
+    # the UI looked stuck at 0 while the analyzer was several chunks in.
+    for line in iter(proc.stdout.readline, ""):
+        line = line.rstrip("\n")
+        if line.startswith("PROGRESS "):
+            try:
+                if on_progress:
+                    on_progress(json.loads(line[len("PROGRESS "):]))
+            except json.JSONDecodeError:
+                pass
+            continue
+        print(line, flush=True)
+        tail.append(line)
+        del tail[:-40]
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError("\n".join(tail[-12:]) or f"analyzer exited {proc.returncode}")
     return Path(f"{out_prefix}.json")
 
 
 def analyze(source, value, compare, filename=None, data=None, threat_intel=None):
     """Resolve a source to a file, analyze it, and become the console's state."""
     global STATE
+    started = time.monotonic()
     work = Path(tempfile.mkdtemp(prefix="analysis-", dir=WORKDIR))
+    set_job(status="running", phase="reading", done=0, total=0, findings=0,
+            label=str(value or filename or "log"), started=started, error=None)
 
     if source == "sample":
         log_path = resolve_sample(value)
@@ -188,19 +229,48 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
     else:
         raise ValueError(f"unknown source {source!r}")
 
-    report_path = run_analyzer(log_path, compare, work / "run")
-    report = json.loads(report_path.read_text())
-    threat = json.loads(Path(threat_intel).read_text()) if threat_intel else None
+    report_path = work / "run.json"
 
-    state = adapter.adapt(report, threat)
-    state["idle"] = False
-    state["sourceKind"] = source
-    state["sourceLabel"] = (value if source in ("sample", "url") else (filename or "uploaded file"))
-    STATE = state
-    try:
-        STATE_FILE.write_text(json.dumps(state, indent=2))
-    except OSError:
-        pass                                     # debugging aid only, never fatal
+    def publish(report_json, partial):
+        """Make a report the console's current state."""
+        global STATE
+        state = adapter.adapt(report_json, None)
+        state["idle"] = False
+        state["partial"] = partial
+        state["sourceKind"] = source
+        state["sourceLabel"] = (value if source in ("sample", "url")
+                                else (filename or "uploaded file"))
+        STATE = state
+        try:
+            STATE_FILE.write_text(json.dumps(state, indent=2))
+        except OSError:
+            pass
+        return state
+
+    def on_progress(p):
+        elapsed = time.monotonic() - started
+        done, total = p.get("done", 0), p.get("total", 0)
+        # Estimate from observed pace rather than a guess, and only once there is
+        # something to extrapolate from.
+        eta = int(elapsed / done * (total - done)) if done and total else None
+        set_job(phase=p.get("phase", "working"), done=done, total=total,
+                findings=p.get("findings", JOB.get("findings", 0)),
+                chunks=p.get("chunks"), gapFill=p.get("gapFill"), etaSeconds=eta)
+
+        # The detector is done long before the model is. Publish those findings now
+        # so the reviewer reads real results while explanations are still arriving.
+        if p.get("partialReady") and report_path.exists():
+            try:
+                publish(json.loads(report_path.read_text()), partial=True)
+                set_job(partialReady=True)
+                print("  published rules-only findings; explanations still running",
+                      flush=True)
+            except (OSError, json.JSONDecodeError):
+                pass
+
+    set_job(phase="rules")
+    run_analyzer(log_path, compare, work / "run", on_progress=on_progress)
+    state = publish(json.loads(report_path.read_text()), partial=False)
     print(f"  serving run id : {state['runId']}", flush=True)
     return state
 
@@ -235,6 +305,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(STATE)
         elif path == "/api/sources":
             self._json({"samples": bundled_samples(), "suggestedUrls": SUGGESTED_URLS})
+        elif path == "/api/progress":
+            self._json(job_snapshot())
         else:
             self.send_error(404, "This server only serves the console, its state, and /api")
 
@@ -245,6 +317,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/analyze":
             self._analyze()
+        elif path == "/api/progress":
+            self._json(job_snapshot())
         elif path == "/api/reset":
             global STATE
             STATE = {"idle": True}
@@ -279,15 +353,27 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
 
         print(f"\n  analyze: source={source} value={str(value)[:70]!r} compare={compare}",
               flush=True)
-        try:
-            state = analyze(source, value, compare, filename=filename, data=data)
-        except ValueError as e:
-            return self._json({"error": str(e)}, 400)
-        except urllib.error.URLError as e:
-            return self._json({"error": f"could not fetch that URL: {e.reason}"}, 502)
-        except Exception as e:                    # analyzer failure — report, do not crash
-            return self._json({"error": f"analysis failed: {e}"}, 500)
-        return self._json(state)
+
+        if job_snapshot().get("status") == "running":
+            return self._json({"error": "an analysis is already running"}, 409)
+
+        def worker():
+            """The analyzer takes minutes; the browser must not wait on the socket."""
+            try:
+                analyze(source, value, compare, filename=filename, data=data)
+                set_job(status="done", phase="done", error=None)
+            except ValueError as e:
+                set_job(status="error", error=str(e))
+            except urllib.error.URLError as e:
+                set_job(status="error", error=f"could not fetch that URL: {e.reason}")
+            except Exception as e:
+                set_job(status="error", error=f"analysis failed: {e}")
+
+        set_job(status="running", phase="starting", done=0, total=0, error=None,
+                label=str(value or filename or "log"))
+        threading.Thread(target=worker, daemon=True).start()
+        # 202: accepted, not finished. The client polls /api/progress.
+        return self._json({"status": "running"}, 202)
 
     def log_message(self, fmt, *args):
         # Format first: log_error() passes (code, message), so indexing args and

@@ -171,7 +171,17 @@ console.log("0. log-source picker (serve.py started with no --input):");
 
   p = withSources('state.busy = true; state.busyLabel = "OpenSSH_2k.log";');
   check("busy screen while analyzing", p.includes("Analyzing OpenSSH_2k.log"));
-  check("busy screen explains the wait", p.includes("takes a few minutes"));
+  check("busy screen explains what is happening", p.includes("runs on this machine"));
+
+  // A bare spinner is indistinguishable from a hang, so the counts are the feature.
+  p = withSources('state.busy = true; state.busyLabel = "OpenSSH_2k.log"; '
+    + 'state.progress = {status:"running", phase:"explain", done:4, total:23, '
+    + 'findings:18, chunks:80, gapFill:false, etaSeconds:1408};');
+  check("busy screen shows chunk progress", p.includes("chunk 4 of 23"));
+  check("busy screen shows a percentage", p.includes("17%"));
+  check("busy screen shows an ETA", p.includes("~23 min left"));
+  check("busy screen reports findings already found", p.includes("18 rule finding(s) already"));
+  check("busy screen explains the scoping", p.includes("cost scales with findings"));
 }
 
 console.log("\n0b. results view offers a way back to the picker:");

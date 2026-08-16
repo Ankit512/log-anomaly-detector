@@ -545,16 +545,45 @@ function pickerHeader() {
   </header>`;
 }
 
+const PHASE_TEXT = {
+  starting: "starting", reading: "reading the log", rules: "running the rules",
+  explain: "explaining findings", compare: "comparing against the model alone",
+  done: "finishing",
+};
+
 function renderBusy() {
+  const p = state.progress || {};
+  const pct = p.total ? Math.round((p.done / p.total) * 100) : null;
+  const eta = p.etaSeconds != null && p.etaSeconds > 0
+    ? (p.etaSeconds >= 90 ? `~${Math.round(p.etaSeconds / 60)} min left`
+                          : `~${p.etaSeconds}s left`)
+    : "";
+
+  // The counts are the point: a bare spinner cannot be told apart from a hang.
+  const detail = p.total
+    ? `${esc(PHASE_TEXT[p.phase] || p.phase || "working")} — chunk ${p.done} of ${p.total}`
+      + (eta ? ` · ${eta}` : "")
+    : esc(PHASE_TEXT[p.phase] || "starting");
+
+  const scope = (p.chunks && p.total && p.gapFill === false)
+    ? `<div class="busy-b">Rules already read all ${p.chunks.toLocaleString()} chunk(s).
+        The model only sees the ${p.total} that contain a finding — cost scales with findings,
+        not file size.</div>`
+    : "";
+
   document.getElementById("app").innerHTML = `
   ${pickerHeader()}
   <div class="busy">
     <div class="spinner"></div>
     <div class="busy-t">Analyzing ${esc(state.busyLabel || "the log")}…</div>
+    <div class="busy-b" style="font-family:var(--font-mono);font-size:12px;color:var(--color-text)">
+      ${detail}${pct != null ? ` · ${pct}%` : ""}
+      ${p.findings ? ` · ${p.findings} rule finding(s) already` : ""}
+    </div>
+    ${scope}
     <div class="busy-b">Rules run over every line first, then the local model explains what
       they found${state.busyCompare ? ", and a second unprimed pass records what the model would "
-      + "have rated each finding on its own" : ""}. On a long log this takes a few minutes —
-      the model runs on this machine.</div>
+      + "have rated each finding on its own" : ""}. The model runs on this machine.</div>
   </div>`;
 }
 
@@ -1108,30 +1137,57 @@ function readControls() {
   if (url) state.urlValue = url.value;
 }
 
+/* The analyzer runs for minutes on a large log, so /api/analyze returns 202 and we
+   poll /api/progress. A blocking request would leave the page frozen with nothing
+   to show — which is indistinguishable from a crash. */
 async function analyze(body, label, isForm) {
   readControls();
   state.busy = true; state.busyLabel = label; state.busyCompare = state.compare;
-  state.error = null;
+  state.progress = null; state.error = null;
   render();
   try {
     const res = await fetch("/api/analyze", isForm
       ? { method: "POST", body }
       : { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...body, compare: state.compare }) });
-    const data = await res.json();
-    state.busy = false;
-    if (!res.ok || data.error) {
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 202) {
+      state.busy = false;
       state.error = data.error || `analysis failed (HTTP ${res.status})`;
       return render();
     }
-    DATA = data;
-    state.selId = null;
-    render();
+    pollProgress();
   } catch (err) {
     state.busy = false;
     state.error = `could not reach the console server: ${err.message}`;
     render();
   }
+}
+
+function pollProgress() {
+  clearInterval(state.pollTimer);
+  state.pollTimer = setInterval(async () => {
+    let job;
+    try {
+      job = await (await fetch("/api/progress", { cache: "no-store" })).json();
+    } catch { return; }                      // transient; keep polling
+
+    if (job.status === "running") {
+      state.progress = job;
+      return render();
+    }
+    clearInterval(state.pollTimer);
+    state.busy = false;
+    if (job.status === "error") {
+      state.error = job.error || "analysis failed";
+      return render();
+    }
+    const data = await (await fetch(`./console_state.json?t=${Date.now()}`,
+                                    { cache: "no-store" })).json();
+    DATA = data;
+    state.selId = null;
+    render();
+  }, 900);
 }
 
 function newAnalysis() {

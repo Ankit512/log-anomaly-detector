@@ -67,6 +67,51 @@ except ValueError:
 
 RULESET_VERSION = "v1"
 
+# Gap-fill = asking the model about chunks NO rule fired on, to catch sub-threshold
+# things like "disk at 78%". It is the only reason to send a chunk containing no
+# finding, and on a large log it is also the entire cost: 2,000 lines is 80 chunks,
+# nearly all empty. So it runs automatically only on inputs small enough to be
+# cheap, and is opt-in beyond that via --deep-scan.
+GAP_FILL_MAX_CHUNKS = 4
+
+# Machine-readable progress for console/serve.py. Off by default so CLI output stays
+# prose; serve.py sets LOG_ANALYZER_PROGRESS=1 and parses these lines.
+_PROGRESS = os.getenv("LOG_ANALYZER_PROGRESS") == "1"
+
+
+def progress(**fields):
+    if _PROGRESS:
+        print("PROGRESS " + json.dumps(fields), flush=True)
+
+
+FINDING_LINES_RE = re.compile(r"lines (\d+)-(\d+)")
+
+
+def finding_line_numbers(anomaly):
+    """Every source line this finding points at, from its timeline and evidence."""
+    lines = {e["line"] for e in anomaly.get("timeline", []) if e.get("line")}
+    m = FINDING_LINES_RE.search(anomaly.get("evidence") or "")
+    if m:
+        lines |= {int(m.group(1)), int(m.group(2))}
+    return lines
+
+
+def chunks_with_findings(anomalies, lines_per_chunk, chunk_count):
+    """Indices of chunks that actually contain a detector finding.
+
+    This is the whole performance story. The detector reads every line for free;
+    the model is only needed to explain what the detector found. Sending it the
+    other 70% of a large log costs minutes and buys nothing, because a finding it
+    produced there would have no rule behind it anyway.
+    """
+    wanted = set()
+    for a in anomalies:
+        for line in finding_line_numbers(a):
+            idx = (line - 1) // lines_per_chunk
+            if 0 <= idx < chunk_count:
+                wanted.add(idx)
+    return wanted
+
 
 def should_run_model(stats):
     """Run the LLM pass only when the parser actually structured something.
@@ -477,7 +522,7 @@ def preflight(base_url, api_key, model):
 
 
 def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
-        base_url: str, api_key: str, compare: bool = False):
+        base_url: str, api_key: str, compare: bool = False, deep_scan: bool = False):
     preflight(base_url, api_key, model)
 
     path = Path(input_path)
@@ -526,6 +571,26 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     chunk_summaries = []
     explanations = {}
 
+    # Which chunks does the model actually need to see?
+    if run_model:
+        finding_chunks = chunks_with_findings(anomalies, lines_per_chunk, len(all_chunks))
+        gap_fill = deep_scan or len(all_chunks) <= GAP_FILL_MAX_CHUNKS
+        selected = sorted(range(len(all_chunks)) if gap_fill else finding_chunks)
+        # Per-chunk context: only the findings that live IN each chunk. Sending the
+        # whole run's context to every chunk made each prompt grow with the number of
+        # findings — and asking the model to explain a finding from lines it cannot
+        # see was never coherent anyway.
+        by_chunk = {}
+        for a in anomalies:
+            for line in finding_line_numbers(a):
+                i = (line - 1) // lines_per_chunk
+                if 0 <= i < len(all_chunks) and a not in by_chunk.setdefault(i, []):
+                    by_chunk[i].append(a)
+        chunk_ctx = {i: to_llm_context(v) for i, v in by_chunk.items()}
+        empty_ctx = to_llm_context([])
+    else:
+        gap_fill, selected, chunk_ctx, empty_ctx = False, [], {}, ""
+
     if not run_model:
         print(f"Skipping the model: 0 of {stats['total_lines']} line(s) parsed, so no rule "
               f"evaluated anything.")
@@ -534,10 +599,47 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     else:
         print(f"Loaded {path.name} — {len(all_chunks)} chunk(s) of ~{lines_per_chunk} lines each")
         print(f"Model: {model} (via {base_url})")
+        if gap_fill:
+            why = "--deep-scan" if deep_scan else f"small input (<= {GAP_FILL_MAX_CHUNKS} chunks)"
+            print(f"  Explaining all {len(selected)} chunk(s) — {why}, so sub-threshold notes "
+                  f"are included.")
+        else:
+            print(f"  Explaining {len(selected)} of {len(all_chunks)} chunk(s): only those "
+                  f"containing a rule finding. The detector already read every line.")
+            print(f"  Use --deep-scan to also look for sub-threshold notes in the other "
+                  f"{len(all_chunks) - len(selected)} chunk(s).")
 
-    for idx, (start_line, chunk_lines) in enumerate(all_chunks):
-        print(f"  Analyzing chunk {idx + 1}/{len(all_chunks)} (lines {start_line}-{start_line + len(chunk_lines)})...")
-        result = analyze_chunk(base_url, api_key, model, chunk_lines, idx, ctx)
+    # Detector findings are instant; explanations are not. Publish a rules-only report
+    # immediately so the console can show real findings in about a second, then
+    # overwrite it when explanations land. A multi-minute blank screen is
+    # indistinguishable from a hang, and the findings were ready the whole time.
+    if run_model and selected:
+        early = detector_to_findings(anomalies)
+        early.sort(key=severity_rank)
+        Path(f"{output_prefix}.json").write_text(json.dumps({
+            "partial": True, "generated_at": datetime.now(timezone.utc).isoformat(),
+            "source_file": str(path), "model": model, "endpoint": base_url,
+            "temperature": LLM_TEMPERATURE, "ruleset": RULESET_VERSION,
+            "lines_parsed": stats["parsed"], "lines_unparsed": stats["unparsed"],
+            "input_sha256": file_sha256(path),
+            "detector_sha256": file_sha256(Path(__file__).resolve().parent / "anomaly_detector.py"),
+            "total_chunks": len(all_chunks), "total_chunks_analyzed": len(selected),
+            "gap_fill": gap_fill, "total_findings": len(early),
+            "findings_by_source": {"detector": len(early), "llm": 0, "analyzer": 0},
+            "findings": early, "chunk_summaries": [],
+        }, indent=2))
+        progress(phase="rules", partialReady=True, findings=len(anomalies))
+
+    progress(phase="explain", done=0, total=len(selected), findings=len(anomalies),
+             chunks=len(all_chunks), gapFill=gap_fill)
+
+    for step, idx in enumerate(selected, start=1):
+        start_line, chunk_lines = all_chunks[idx]
+        print(f"  Explaining chunk {idx + 1}/{len(all_chunks)} "
+              f"({step}/{len(selected)}, lines {start_line}-{start_line + len(chunk_lines)})...")
+        result = analyze_chunk(base_url, api_key, model, chunk_lines, idx,
+                               chunk_ctx.get(idx, empty_ctx))
+        progress(phase="explain", done=step, total=len(selected), chunk=idx + 1)
 
         for ex in result.get("explanations", []):
             rid = ex.get("rule_id")
@@ -585,8 +687,12 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         def chat_fn(system, user):
             return chat_completion(base_url, api_key, model, system, user)
 
+        # Same scoping: an LLM-alone verdict only means something for a chunk that
+        # has a rule verdict to compare it against.
+        compare_chunks = [all_chunks[i][1] for i in selected]
+        progress(phase="compare", done=0, total=len(compare_chunks))
         llm_alone, statuses = compare_mod.run_llm_alone(
-            [c for _, c in all_chunks], chat_fn, model, LLM_TEMPERATURE, strip_fences)
+            compare_chunks, chat_fn, model, LLM_TEMPERATURE, strip_fences)
         ok = sum(1 for s in statuses if s in compare_mod.USABLE_STATUSES)
         coverage_ok = ok == len(statuses)
         print(f"  unprimed pass: {ok}/{len(statuses)} chunk(s) usable, "
@@ -625,7 +731,9 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "lines_unparsed": stats["unparsed"],
         "input_sha256": file_sha256(path),
         "detector_sha256": file_sha256(Path(__file__).resolve().parent / "anomaly_detector.py"),
-        "total_chunks_analyzed": len(all_chunks),
+        "total_chunks": len(all_chunks),
+        "total_chunks_analyzed": len(selected),
+        "gap_fill": gap_fill,
         "total_findings": len(all_findings),
         # An analyzer_error is a failure to analyze, not a contribution. Counting it
         # under "llm" overstated model participation in exactly the runs where the
@@ -737,7 +845,11 @@ if __name__ == "__main__":
                         help="Also run an unprimed LLM-alone pass and record what the model "
                              "would have rated each finding without the rules. Doubles "
                              "inference cost; never changes an authoritative severity.")
+    parser.add_argument("--deep-scan", action="store_true",
+                        help="Ask the model about every chunk, not just those with a "
+                             "rule finding. Finds sub-threshold notes anywhere in the "
+                             "file; cost then scales with file size, not findings.")
     args = parser.parse_args()
 
     run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY,
-        compare=args.compare)
+        compare=args.compare, deep_scan=args.deep_scan)
