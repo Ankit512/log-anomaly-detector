@@ -626,12 +626,13 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         # findings — and asking the model to explain a finding from lines it cannot
         # see was never coherent anyway.
         by_chunk = {}
-        for a in anomalies:
+        for pos, a in enumerate(anomalies):
             for line in finding_line_numbers(a):
                 i = (line - 1) // lines_per_chunk
-                if 0 <= i < len(all_chunks) and a not in by_chunk.setdefault(i, []):
-                    by_chunk[i].append(a)
-        chunk_ctx = {i: to_llm_context(v) for i, v in by_chunk.items()}
+                if 0 <= i < len(all_chunks) and pos not in by_chunk.setdefault(i, []):
+                    by_chunk[i].append(pos)
+        chunk_ctx = {i: to_llm_context([anomalies[j] for j in v])
+                     for i, v in by_chunk.items()}
         empty_ctx = to_llm_context([])
     else:
         gap_fill, selected, chunk_ctx, empty_ctx = False, [], {}, ""
@@ -690,10 +691,29 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
                                chunk_ctx.get(idx, empty_ctx))
         progress(phase="explain", done=step, total=len(selected), chunk=idx + 1)
 
+        # Tie each explanation to the findings in THIS chunk with that rule id.
+        # Keying by rule id alone pasted one chunk's prose onto every finding of the
+        # same type — an explanation naming 112.95.230.3 appeared on findings about
+        # entirely different addresses, which is worse than showing nothing.
+        here = by_chunk.get(idx, [])
         for ex in result.get("explanations", []):
-            rid = ex.get("rule_id")
-            if rid and rid not in explanations and ex.get("explanation"):
-                explanations[rid] = ex["explanation"]
+            rid, text = ex.get("rule_id"), ex.get("explanation")
+            if not text:
+                continue
+            targets = [j for j in here if anomalies[j].get("type") == rid] or \
+                      ([here[0]] if len(here) == 1 and not rid else [])
+            for j in targets:
+                # When a chunk holds two findings of the same type the model writes
+                # one explanation, usually naming only one of them. Attach it only
+                # where the prose actually refers to that finding; the others stay
+                # pending and get their own on demand. Prose about the wrong host is
+                # worse than no prose.
+                ents = anomalies[j].get("entities") or {}
+                ident = next((str(ents[k]) for k in ("ip", "dest_ip", "host")
+                              if ents.get(k)), None)
+                if ident and ident not in text:
+                    continue
+                explanations.setdefault(j, text)
 
         for finding in result.get("findings", []):
             # Analyzer-generated findings (e.g. off-schema failures) are ours, not the
@@ -718,9 +738,10 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
 
     # Detector findings are authoritative and added ONCE, not per chunk.
     detector_findings = detector_to_findings(anomalies)
-    for f in detector_findings:
-        if f["rule_id"] in explanations:
-            f["recommended_action"] = explanations[f["rule_id"]]
+    # detector_to_findings preserves anomaly order, so position maps 1:1.
+    for pos, f in enumerate(detector_findings):
+        if pos in explanations:
+            f["recommended_action"] = explanations[pos]
 
     # --- Optional ablation: what would the model alone have said? ---------------
     # Strictly additive. Runs a SECOND, unprimed pass over the same chunks and
