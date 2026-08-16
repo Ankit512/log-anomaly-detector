@@ -272,9 +272,32 @@ check("no 'shown as context only' dismissal", !h.includes("Shown as context only
 check("rule card says no rule fired rather than a bare em-dash",
       h.includes("no rule fired") && h.includes("Nothing in the ruleset matched"));
 
-console.log("\n12. HONEST STATE — zero findings is All clear:");
+console.log("\n12. HONEST STATE — 0 parsed is NOT an all-clear:");
+/* Zero findings because nothing was read is not zero findings. Showing the green
+   tick here would report a false success on an audit surface. */
+const unrec = clone(LIVE);
+unrec.findings = []; unrec.linesParsed = 0; unrec.linesUnparsed = 100;
+unrec.unrecognized = true; unrec.emptyInput = false;
+unrec.runParsed = "0 lines parsed · 100 unparsed";
+h = run(unrec).html;
+check("shows the unrecognized-format state", h.includes("Log format not recognized"));
+check("states 0 of N parsed", h.includes("0 of 100 lines parsed"));
+check("explicitly NOT an all-clear", h.includes("not</strong> an all-clear"));
+check("does NOT render the green all-clear", !h.includes("All clear — 0 anomalies"));
+check("no success tick", !h.includes(">✓<"));
+check("detail pane says nothing was analyzed", h.includes("Nothing was analyzed"));
+
+const emptyIn = clone(LIVE);
+emptyIn.findings = []; emptyIn.linesParsed = 0; emptyIn.linesUnparsed = 0;
+emptyIn.unrecognized = false; emptyIn.emptyInput = true;
+h = run(emptyIn).html;
+check("empty input gets its own wording", h.includes("the input is empty"));
+check("empty input is not an all-clear either", !h.includes("All clear — 0 anomalies"));
+
+console.log("\n13. HONEST STATE — zero findings WITH lines parsed is All clear:");
 const clear = clone(LIVE);
-clear.findings = [];
+clear.findings = []; clear.linesParsed = 19; clear.linesUnparsed = 0;
+clear.unrecognized = false; clear.emptyInput = false;
 h = run(clear).html;
 check("all-clear empty state", h.includes("All clear — 0 anomalies"));
 check("detail pane empty state", h.includes("No finding to review"));

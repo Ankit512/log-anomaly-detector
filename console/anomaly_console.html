@@ -682,7 +682,14 @@ function row(f, cur) {
   </div>`;
 }
 
+/* Zero findings has three very different meanings. Only one of them is good news,
+   and showing the green tick for the other two would report a false success. */
+const isUnrecognized = () => DATA.live && DATA.unrecognized === true;
+const isEmptyInput = () => DATA.live && DATA.emptyInput === true;
+
 function emptyList() {
+  if (isUnrecognized() || isEmptyInput()) return unrecognizedState();
+
   const clear = isClear();
   const body = DATA.live
     ? `${esc(DATA.runParsed)}, every rule evaluated, nothing crossed a threshold. `
@@ -697,16 +704,40 @@ function emptyList() {
   </div>`;
 }
 
+/* Cautionary, never celebratory: nothing was analyzed, so nothing can be claimed. */
+function unrecognizedState() {
+  const empty = isEmptyInput();
+  const total = (DATA.linesParsed || 0) + (DATA.linesUnparsed || 0);
+  return `
+  <div class="empty">
+    <div class="empty-mark" style="border-color:#7a6a3c;color:#d8b45e">!</div>
+    <div class="empty-t">${empty
+      ? "Nothing to analyze — the input is empty"
+      : `Log format not recognized — 0 of ${total.toLocaleString()} lines parsed`}</div>
+    <div class="empty-b" style="max-width:420px">${empty
+      ? "The file contains no log lines. No rules ran, so this is not an all-clear."
+      : "Nothing was analyzed. The parser did not recognize this format, so no rule "
+        + "evaluated a single line — this is <strong>not</strong> an all-clear. Every line is "
+        + "counted as unparsed rather than dropped; add a parser for this format to analyze it."}</div>
+  </div>`;
+}
+
 function detailPane(d) {
   if (!d) {
     const clear = isClear();          // derived from the data, not the demo switcher
     return `
     <section class="detail-pane">
       <div class="nodetail">
-        <div class="nodetail-t">${clear ? "No finding to review" : "Select a finding"}</div>
-        <div class="nodetail-b">${clear
-          ? "This run produced no anomalies. The run manifest above records the input and detector hashes for the audit trail."
-          : "Pick a row on the left, or press j and k to move through the list."}</div>
+        <div class="nodetail-t">${
+          isUnrecognized() || isEmptyInput() ? "Nothing was analyzed"
+          : clear ? "No finding to review" : "Select a finding"}</div>
+        <div class="nodetail-b">${
+          isUnrecognized() || isEmptyInput()
+            ? "No findings exist because nothing was parsed. Confirm the log format before "
+              + "treating this run as evidence of anything."
+          : clear
+            ? "This run produced no anomalies. The run manifest above records the input and detector hashes for the audit trail."
+            : "Pick a row on the left, or press j and k to move through the list."}</div>
       </div>
     </section>`;
   }

@@ -217,6 +217,19 @@ def adapt(report, threat_report=None):
             "endpoint": report.get("endpoint"),
         },
 
+        # Three different empty outcomes, and the console must never conflate them:
+        #   parsed > 0, no findings  -> all clear (a real success)
+        #   parsed == 0, lines seen  -> unrecognized format (nothing was analyzed)
+        #   parsed == 0, no lines    -> empty input
+        # Reporting the second as "all clear" would be a false success on an audit
+        # surface: zero findings because nothing was read is not zero findings.
+        "linesParsed": report.get("lines_parsed", 0),
+        "linesUnparsed": report.get("lines_unparsed", 0),
+        "unrecognized": (report.get("lines_parsed", 0) == 0
+                         and report.get("lines_unparsed", 0) > 0),
+        "emptyInput": (report.get("lines_parsed", 0) == 0
+                       and report.get("lines_unparsed", 0) == 0),
+
         "compareRun": compare_run,
         "underratedCount": (compare or {}).get("underrated_count"),
         "chunksUsable": (compare or {}).get("chunks_usable"),
