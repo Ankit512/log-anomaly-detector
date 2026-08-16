@@ -141,8 +141,19 @@ SCHEMA_NUDGE = (
 )
 
 
-def chunk_log_file(path: Path, lines_per_chunk: int = 100):
-    """Yield chunks of the log file as lists of lines."""
+def chunk_log_file(path: Path, lines_per_chunk: int = 25):
+    """Yield chunks of the log file as lists of lines.
+
+    25, not 100. llama3.1:8b abandons the response schema on ~100 lines of dense
+    real logs — measured three times (T5a, the compare benchmark, and a field test
+    on unseen OpenSSH lines, where a 100-line chunk produced analyzer_error and no
+    explanation at all). At 25 lines the benchmark saw 0 of 21 chunks degrade.
+
+    The trade-off is ~4x more model calls per log, and a chattier model (smaller
+    windows surface more below-threshold notes). This affects ONLY the LLM pass:
+    the detector reads every line of the file regardless, so rule severities and
+    correlation are identical at any chunk size.
+    """
     with open(path, "r", errors="replace") as f:
         lines = f.readlines()
     for i in range(0, len(lines), lines_per_chunk):
@@ -680,7 +691,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="AI-powered log analysis (Phase 1: read-only)")
     parser.add_argument("--input", required=True, help="Path to log file to analyze")
     parser.add_argument("--output", default="report", help="Output file prefix (default: report)")
-    parser.add_argument("--lines-per-chunk", type=int, default=100, help="Lines per chunk sent to the model")
+    parser.add_argument("--lines-per-chunk", type=int, default=25,
+                        help="Lines per chunk sent to the model (default 25 — larger "
+                             "chunks make an 8B model drop the response schema; the "
+                             "detector is unaffected either way)")
     parser.add_argument("--model", default=LLM_MODEL, help=f"Model to use (default: $LLM_MODEL or {LLM_MODEL})")
     parser.add_argument("--base-url", default=LLM_BASE_URL, help=f"OpenAI-compatible base URL (default: $LLM_BASE_URL or {LLM_BASE_URL})")
     parser.add_argument("--compare", action="store_true",
