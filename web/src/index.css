@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ==========================================================================
+   Design tokens — defined ONCE, inherited by every page through the shell.
+   shadcn-style hsl triplets for surfaces/ink, plus the severity status
+   palette as raw values (charts read them via style="fill:var(--sev-*)";
+   CSS var() is invalid in SVG presentation attributes, so never fill="var()").
+
+   Both severity quartets were validated with the dataviz six-checks script
+   against their surface (light #f4f5f8 · dark #232532). Color is never the
+   only signal: severity names and counts always render as text beside it.
+   ========================================================================== */
+@layer base {
+  :root {
+    --background: 228 22% 96%;        /* #f4f5f8 */
+    --foreground: 225 33% 15%;        /* #1a2033 */
+    --card: 0 0% 100%;
+    --card-foreground: 225 33% 15%;
+    --muted: 228 18% 92%;
+    --muted-foreground: 227 10% 43%;  /* #5a6172-ish */
+    --primary: 243 75% 59%;           /* #4f46e5 */
+    --primary-foreground: 0 0% 100%;
+    --accent: 235 84% 96%;            /* #eef0fd */
+    --accent-foreground: 243 75% 45%;
+    --border: 231 24% 91%;            /* #e4e6ee */
+    --input: 231 24% 91%;
+    --ring: 243 75% 59%;
+
+    --sev-critical: #991b1b;
+    --sev-high: #ea580c;
+    --sev-medium: #caa204;
+    --sev-low: #166534;
+  }
+
+  .dark {
+    --background: 233 26% 12%;        /* #161826 */
+    --foreground: 240 9% 92%;         /* #e9e9ed */
+    --card: 232 17% 17%;              /* #232532 */
+    --card-foreground: 240 9% 92%;
+    --muted: 231 14% 22%;
+    --muted-foreground: 229 15% 72%;  /* #b2b6ca-ish */
+    --primary: 249 57% 71%;           /* #968ae0 */
+    --primary-foreground: 233 26% 12%;
+    --accent: 250 28% 28%;
+    --accent-foreground: 248 91% 83%; /* #b5abfc */
+    --border: 240 9% 92% / 0.14;
+    --input: 240 9% 92% / 0.14;
+    --ring: 249 57% 71%;
+
+    --sev-critical: #b25353;
+    --sev-high: #cd8036;
+    --sev-medium: #827208;
+    --sev-low: #3f9f83;
+  }
+
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground font-sans antialiased text-sm; }
+}
