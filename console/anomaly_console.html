@@ -472,6 +472,9 @@ const state = {
   runs: null, showRuns: false,   // saved-run navigation
   busy: false, busyLabel: "", busyCompare: false,
   compare: false, urlValue: "", error: null,
+  // Where explanations compute. Local is the default and today's behaviour;
+  // remote sends ONLY redacted finding-lines through the server's choke point.
+  computeCfg: { mode: "local", baseUrl: "", apiKey: "", model: "" },
 
   view: "incident",      // demo-only: incident | partial | clear
   filter: "all",         // all | dis | llm | open
@@ -548,6 +551,7 @@ function render() {
     header(disagree.length),
     runBar(),
     STANDALONE ? standaloneBanner() : "",
+    (DATA.compute && DATA.compute.remote) ? computeBanner() : "",
     state.manifest ? manifestStrip() : "",
     // Independent of finding count. Gating this on an empty list was the bug: a run
     // that parsed nothing but still listed model output read as coverage it never had.
@@ -604,9 +608,12 @@ function renderBusy() {
       ${p.findings ? ` · ${p.findings} rule finding(s) already` : ""}
     </div>
     ${scope}
-    <div class="busy-b">Rules run over every line first, then the local model explains what
+    <div class="busy-b">${state.computeCfg && state.computeCfg.mode === "remote"
+      ? "Rules run over every line on this machine; nothing is sent during analysis. "
+        + "Explanations are produced on demand through the redaction gate."
+      : `Rules run over every line first, then the local model explains what
       they found${state.busyCompare ? ", and a second unprimed pass records what the model would "
-      + "have rated each finding on its own" : ""}. The model runs on this machine.</div>
+      + "have rated each finding on its own" : ""}. The model runs on this machine.`}</div>
   </div>`;
 }
 
@@ -660,6 +667,33 @@ function renderPicker() {
       <div class="src-row">${chips}</div>
     </div>
 
+    <div class="src">
+      <div class="src-k">Compute</div>
+      <div class="src-t">Where explanations run</div>
+      <div class="src-note">Rules decide severity and correlation on this machine either way,
+        and the raw log never travels. A remote node only ever receives the finding lines,
+        redacted — IPs, usernames and hostnames masked — and only returns advisory prose.</div>
+      <label class="pick-opt" style="margin:0 0 var(--space-2)">
+        <input type="radio" name="computeMode" value="local"
+               ${state.computeCfg.mode !== "remote" ? "checked" : ""}>
+        Run explanations on this machine (default)
+      </label>
+      <label class="pick-opt" style="margin:0 0 var(--space-2)">
+        <input type="radio" name="computeMode" value="remote"
+               ${state.computeCfg.mode === "remote" ? "checked" : ""}>
+        Use a remote compute node — only redacted finding-lines are sent
+      </label>
+      <div class="src-row">
+        <input type="text" id="computeUrl" class="input" style="flex:1;min-width:280px"
+               placeholder="https://compute.example.com/v1 — base URL (remote only)"
+               value="${esc(state.computeCfg.baseUrl || "")}">
+        <input type="password" id="computeKey" class="input" style="width:170px"
+               placeholder="API key (optional)" value="${esc(state.computeCfg.apiKey || "")}">
+        <input type="text" id="computeModel" class="input" style="width:150px"
+               placeholder="model (optional)" value="${esc(state.computeCfg.model || "")}">
+      </div>
+    </div>
+
     <label class="pick-opt">
       <input type="checkbox" id="cmpInput" ${state.compare ? "checked" : ""}>
       Run compare (LLM-alone) — a second unprimed pass that records what the model would rate
@@ -678,6 +712,12 @@ function renderPicker() {
     </div>` : ""}
   </div></div>`;
 }
+
+/* The standing guarantee, kept honest when a remote compute node is enabled:
+   verdicts still never leave this machine; only redacted finding-lines do. */
+const localPillText = () => (DATA.compute && DATA.compute.remote)
+  ? "verdicts computed locally · only redacted finding-lines leave"
+  : "processed locally · 0 bytes leave this machine";
 
 function header(underratedCount) {
   const seg = (val, label) =>
@@ -701,7 +741,7 @@ function header(underratedCount) {
     <div class="brand"><b>itsoc</b><span>local log anomaly review</span></div>
     ${comparePill}
     <div class="pill pill-local">
-      <span class="dot-live"></span><span>processed locally · 0 bytes leave this machine</span>
+      <span class="dot-live"></span><span>${localPillText()}</span>
     </div>
     ${DATA.live ? "" : `<div class="seg" style="margin-left:4px">
       ${seg("incident", "Incident run")}${seg("partial", "Partial")}${seg("clear", "All clear")}
@@ -732,6 +772,21 @@ function runBar() {
       <button class="btn btn-secondary" data-act="print">Print report</button>
       <button class="btn btn-primary" data-act="manifest">Run manifest · integrity</button>
     </div>
+  </div>`;
+}
+
+/* Honest surface for remote compute: names the host explanations run on and
+   the number of redacted finding-lines that have ACTUALLY been sent — the
+   count comes from the server's choke point, never from a guess. The raw log
+   never travels. */
+function computeBanner() {
+  const c = DATA.compute || {};
+  return `
+  <div style="display:flex;align-items:center;gap:var(--space-3);padding:var(--space-2) var(--space-6);
+    background:rgba(216,163,94,.10);box-shadow:inset 0 -1px 0 rgba(216,163,94,.30);flex:none;
+    font-size:11.5px;color:var(--color-neutral-400)">
+    <span style="color:#d8a35e;font-weight:500">Remote compute</span>
+    <span>${esc(c.banner || "")}</span>
   </div>`;
 }
 
@@ -1175,7 +1230,7 @@ function footer() {
   const short = (h) => (h ? String(h).slice(0, 8) : "—");
   return `
   <footer class="ftr">
-    <span class="local"><i></i>processed locally · 0 bytes leave this machine</span>
+    <span class="local"><i></i>${localPillText()}</span>
     <span>model ${esc(m.model || "—")}</span>
     <span>ruleset ${esc(m.ruleset || "—")}</span>
     <span>detector ${esc(short(m.detector_sha256))}</span>
@@ -1238,6 +1293,15 @@ function readControls() {
   if (cmp) state.compare = cmp.checked;
   const url = document.getElementById("urlInput");
   if (url) state.urlValue = url.value;
+  const mode = document.querySelector("input[name='computeMode']:checked");
+  if (mode) {
+    state.computeCfg = {
+      mode: mode.value,
+      baseUrl: (document.getElementById("computeUrl") || {}).value || "",
+      apiKey: (document.getElementById("computeKey") || {}).value || "",
+      model: (document.getElementById("computeModel") || {}).value || "",
+    };
+  }
 }
 
 /* The analyzer runs for minutes on a large log, so /api/analyze returns 202 and we
@@ -1245,6 +1309,20 @@ function readControls() {
    to show — which is indistinguishable from a crash. */
 async function analyze(body, label, isForm) {
   readControls();
+  // The compute choice must be on the server BEFORE analysis starts: rules-only
+  // vs local-model runs are decided there. An invalid remote URL stops here —
+  // silently falling back to local would disrespect an explicit choice.
+  try {
+    const cres = await fetch("/api/compute", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(state.computeCfg || { mode: "local" }),
+    });
+    if (!cres.ok) {
+      const d = await cres.json().catch(() => ({}));
+      state.error = d.error || "invalid remote compute settings";
+      return render();
+    }
+  } catch { /* server unreachable — the analyze call below reports it */ }
   state.busy = true; state.busyLabel = label; state.busyCompare = state.compare;
   state.progress = null; state.error = null;
   render();
