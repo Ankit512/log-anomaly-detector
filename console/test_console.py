@@ -1836,6 +1836,239 @@ console.log("BAD=" + run("?sel=nope"));
     return 0 if all(results) else 1
 
 
+def check_soc_subsystems():
+    """Phase B subsystems (docs/soc_subsystems.md): incidents correlate real
+    findings only, lifecycle timestamps come from analyst actions, assets and
+    users are observed entities, cases round-trip, reports are real files,
+    threat intel surfaces what exists, and metrics are honest or null."""
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import adapter
+    import serve
+    import soc
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nSOC subsystems — incidents, assets/users, cases, reports, intel, metrics:")
+
+    real = (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE,
+            serve.CURRENT_RUN_FILE, soc.SOC_DIR)
+    try:
+        with tempfile.TemporaryDirectory(prefix="subsys-test-") as tmp:
+            tmp = Path(tmp)
+            serve.RUNS_DIR, serve.STATE_FILE = tmp / ".runs", tmp / "state.json"
+            soc.SOC_DIR = tmp / ".soc"
+
+            log = tmp / "attack.log"
+            log.write_text("\n".join(
+                f"2026-08-13T02:16:{44 + i}Z ERROR host-1 "
+                f"auth failed for user 'admin' from 203.0.113.44"
+                for i in range(6)) + "\n")
+
+            def finding(rule, sev, stamp, line, entities):
+                who = (" for user 'admin' from 203.0.113.44"
+                       if rule.startswith("auth_") else "")
+                return {"source": "detector", "severity": sev, "rule_id": rule,
+                        "summary": f"{rule}{who}", "evidence": "",
+                        "entities": entities,
+                        "timeline": [{"t": stamp[11:16], "label": "x", "line": line,
+                                      "ts": stamp}]}
+
+            state = adapter.adapt({
+                "source_file": str(log), "generated_at": "2026-08-18T12:00:00+00:00",
+                "lines_parsed": 6, "lines_unparsed": 0,
+                "findings": [
+                    finding("auth_bruteforce_success", "critical",
+                            "2026-08-13T02:16:52+00:00", 6, {"ip": "203.0.113.44"}),
+                    finding("auth_bruteforce", "high",
+                            "2026-08-13T02:17:00+00:00", 2, {"ip": "203.0.113.44"}),
+                    finding("suspicious_outbound", "high",
+                            "2026-08-13T02:20:00+00:00", 3,
+                            {"dest_ip": "198.51.100.23", "port": 4444}),
+                    finding("error_rate_spike", "medium",
+                            "2026-08-13T03:30:00+00:00", 1, {}),
+                    finding("auth_bruteforce", "high",
+                            "2026-08-13T04:00:00+00:00", 4, {"ip": "203.0.113.44"}),
+                ]})
+            state["idle"] = False
+            state["sourceLabel"] = "attack.log"
+            serve.STATE = state
+
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def req(method, path, obj=None):
+                data = json.dumps(obj).encode() if obj is not None else None
+                r = urllib.request.Request(f"http://127.0.0.1:{port}{path}",
+                                           data=data, method=method,
+                                           headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(r) as resp:
+                        return resp.status, json.loads(resp.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read() or b"{}")
+
+            try:
+                # --- incidents: correlation ------------------------------------
+                _, out = req("GET", "/api/incidents")
+                incs = out["incidents"]
+                by_entity = {}
+                for i in incs:
+                    by_entity.setdefault(i["entity"], []).append(i)
+                check("4 incidents from 5 findings (entity + 30-min window)",
+                      len(incs) == 4, str([(i['entity'], i['findingCount']) for i in incs]))
+                pair = [i for i in by_entity.get("203.0.113.44", [])
+                        if i["findingCount"] == 2]
+                check("two findings on one IP within the window correlate",
+                      len(pair) == 1 and set(pair[0]["findingIds"])
+                      == {"detector-0", "detector-1"}, str(pair))
+                check("same entity past the 30-min gap = a separate incident",
+                      len(by_entity.get("203.0.113.44", [])) == 2)
+                check("incident severity = max member rule severity",
+                      pair[0]["severity"] == "CRITICAL" and pair[0]["entityKind"] == "ip")
+                check("detection time = earliest finding time",
+                      pair[0]["createdAt"] == "2026-08-13T02:16:52+00:00")
+                check("attacker status derived from member techniques",
+                      pair[0]["attackerStatus"] == "Spreading Inside")
+                check("no incident exists without findings",
+                      all(i["findingCount"] >= 1 and i["findingIds"] for i in incs))
+                _, again = req("GET", "/api/incidents")
+                check("re-deriving is idempotent (no duplicates)",
+                      len(again["incidents"]) == 4)
+                check("fresh incidents start 'new' with null lifecycle stamps",
+                      all(i["state"] == "new" and i["acknowledgedAt"] is None
+                          and i["resolvedAt"] is None for i in incs))
+
+                # --- metrics BEFORE any analyst action: honest nulls -----------
+                _, m = req("GET", "/api/metrics")
+                check("metrics: no acknowledgements -> mttd/mttr are null",
+                      m["mttdSeconds"] is None and m["mttrSeconds"] is None
+                      and m["mttdBasis"] == 0 and m["mttrBasis"] == 0, str(m))
+                check("metrics: openIncidents/assets/users from real data",
+                      m["openIncidents"] == 4 and m["assetsAtRisk"] == 3
+                      and m["usersAtRisk"] == 1, str(m))
+
+                # --- incident lifecycle ----------------------------------------
+                iid = pair[0]["id"]
+                _, inc = req("POST", f"/api/incidents/{iid}/state",
+                             {"state": "acknowledged"})
+                check("acknowledge stamps acknowledgedAt",
+                      inc["state"] == "acknowledged" and inc["acknowledgedAt"])
+                _, inc = req("POST", f"/api/incidents/{iid}/state", {"state": "resolved"})
+                check("resolve stamps resolvedAt", inc["resolvedAt"] is not None)
+                _, inc = req("POST", f"/api/incidents/{iid}/state",
+                             {"state": "investigating"})
+                check("reopening clears resolvedAt but keeps acknowledgedAt",
+                      inc["resolvedAt"] is None and inc["acknowledgedAt"])
+                status, _ = req("POST", f"/api/incidents/{iid}/state", {"state": "bogus"})
+                check("invalid transition -> 400", status == 400)
+                status, _ = req("POST", "/api/incidents/inc-nope/state", {"state": "new"})
+                check("unknown incident -> 404", status == 404)
+                req("POST", f"/api/incidents/{iid}/state", {"state": "resolved"})
+                _, out = req("GET", "/api/incidents?state=resolved")
+                check("?state= filters the list",
+                      [i["id"] for i in out["incidents"]] == [iid])
+                _, m = req("GET", "/api/metrics")
+                check("metrics: one resolved incident -> real mttd/mttr, basis 1",
+                      m["mttrSeconds"] is not None and m["mttrBasis"] == 1
+                      and m["mttdSeconds"] is not None and m["openIncidents"] == 3,
+                      str(m))
+
+                # --- assets & users: observed entities only --------------------
+                _, out = req("GET", "/api/assets")
+                assets = {a["name"]: a for a in out["assets"]}
+                check("assets = the observed host + the two finding IPs, nothing else",
+                      set(assets) == {"host-1", "203.0.113.44", "198.51.100.23"},
+                      str(sorted(assets)))
+                check("host asset carries real event/finding counts",
+                      assets["host-1"]["kind"] == "host"
+                      and assets["host-1"]["events"] == 6
+                      and assets["host-1"]["atRisk"] is True)
+                check("ip asset flagged at risk with finding count",
+                      assets["203.0.113.44"]["kind"] == "ip"
+                      and assets["203.0.113.44"]["findings"] == 3)
+                _, out = req("GET", "/api/users")
+                users = {u["name"]: u for u in out["users"]}
+                check("users = usernames actually present in the log, nothing else",
+                      set(users) == {"admin"}, str(sorted(users)))
+                check("user counts trace to events (6 lines name 'admin')",
+                      users["admin"]["events"] == 6 and users["admin"]["atRisk"] is True)
+
+                # --- cases: analyst CRUD round-trip -----------------------------
+                status, case = req("POST", "/api/cases",
+                                   {"title": "Investigate 203.0.113.44",
+                                    "links": {"incidents": [iid]}})
+                check("case created (201, open, linked)",
+                      status == 201 and case["id"] == "case-1"
+                      and case["status"] == "open"
+                      and case["links"]["incidents"] == [iid])
+                status, case = req("PATCH", f"/api/cases/{case['id']}",
+                                   {"notes": "checked the firewall",
+                                    "status": "investigating"})
+                check("case PATCH round-trips fields",
+                      status == 200 and case["notes"] == "checked the firewall"
+                      and case["status"] == "investigating")
+                _, got = req("GET", "/api/cases/case-1")
+                check("case persists across requests",
+                      got["notes"] == "checked the firewall")
+                status, _ = req("PATCH", "/api/cases/case-1", {"status": "bogus"})
+                check("invalid case status -> 400", status == 400)
+                status, _ = req("POST", "/api/cases", {"title": "  "})
+                check("case without a title -> 400", status == 400)
+                status, _ = req("GET", "/api/cases/case-99")
+                check("unknown case -> 404", status == 404)
+
+                # --- reports: real files only ----------------------------------
+                _, out = req("GET", "/api/reports")
+                check("no generated reports -> empty list, not invented entries",
+                      out["reports"] == [])
+                status, rep = req("POST", "/api/reports")
+                check("generate writes a real HTML artifact",
+                      status == 200 and rep["name"].endswith(".html")
+                      and rep["bytes"] > 0
+                      and (soc.SOC_DIR / "reports" / rep["name"]).exists())
+                _, out = req("GET", "/api/reports")
+                check("generated report is listed", len(out["reports"]) == 1)
+
+                # --- threat intel: surface what exists --------------------------
+                _, ti = req("GET", "/api/threat-intel")
+                check("indicators come from the shipped STIX bundle",
+                      ti["indicators"] and "demo_threat_intel" in ti["indicatorSource"]
+                      and any("203.0.113.44" in (i.get("pattern") or "")
+                              for i in ti["indicators"]))
+                check("rule->technique table surfaced verbatim",
+                      ti["ruleTechniques"]["auth_bruteforce"][0]["id"] == "T1110")
+
+                # --- idle honesty ----------------------------------------------
+                serve.STATE = {"idle": True}
+                _, out = req("GET", "/api/assets")
+                check("idle assets -> honest error, not an empty inventory",
+                      "error" in out)
+                status, _ = req("POST", "/api/reports")
+                check("idle report generation -> 409", status == 409)
+                _, m = req("GET", "/api/metrics")
+                check("idle metrics: per-run fields null, store fields real",
+                      m["assetsAtRisk"] is None and m["usersAtRisk"] is None
+                      and m["openIncidents"] == 3)
+            finally:
+                srv.shutdown()
+    finally:
+        (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE,
+         serve.CURRENT_RUN_FILE, soc.SOC_DIR) = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -1878,12 +2111,13 @@ def main():
     layout = check_layout_css()
     allruns = check_allruns()
     soc = check_soc_overview()
+    subsystems = check_soc_subsystems()
     if (result.returncode or routing or log360 or remote or dashboard or layout
-            or allruns or soc):
+            or allruns or soc or subsystems):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems checks green")
     return 0
 
 
