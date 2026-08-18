@@ -1,0 +1,11 @@
+Message,Common Severity,LogType,Process Id,Facility,Severity,Time,Device,Source
+"Failed to connect to database, retrying in 5s",Error,Application,412,daemon,Error,2026-08-17 09:37:00,app-01,syslog
+Database connection timeout after 30s,Error,Application,412,daemon,Error,2026-08-17 09:37:08,app-01,syslog
+Database connection timeout after 30s,Error,Application,412,daemon,Error,2026-08-17 09:37:15,app-01,syslog
+Database connection timeout after 30s,Error,Application,412,daemon,Error,2026-08-17 09:37:22,app-01,syslog
+Query aborted: upstream unavailable,Error,Application,412,daemon,Error,2026-08-17 09:37:30,app-01,syslog
+Outbound connection to 198.51.100.23:4444 blocked by policy,Warning,Firewall,77,daemon,Warning,2026-08-17 09:38:02,fw-01,syslog
+Scheduled backup started,Information,Application,412,daemon,Information,2026-08-17 09:40:00,app-01,syslog
+Heartbeat received from probe,,Monitoring,,daemon,,2026-08-17 09:40:30,,monitor-02
+Kernel watchdog reset counter cleared,Unknown,System,1,kern,,2026-08-17 09:41:00,app-01,syslog
+Service worker pool resized to 8,Notice,Application,412,daemon,Notice,2026-08-17 09:42:11,app-01,syslog

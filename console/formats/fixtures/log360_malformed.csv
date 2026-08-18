@@ -1,0 +1,6 @@
+### ManageEngine Log360 scheduled report (corrupted export) ###
+report-id;window;status
+88213;last-24h;partial
+::chunk 1 of 3 missing::
+{"note": "this is neither the Log360 CSV header nor |PRI| forwarded syslog"}
+xx|9999|not an envelope either

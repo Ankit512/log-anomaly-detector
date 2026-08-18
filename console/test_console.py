@@ -682,6 +682,112 @@ def check_server_routing():
     return 0 if all(results) else 1
 
 
+def check_log360():
+    """Log360 sibling-parser checks: both entry shapes, the honest banner, and
+    the two evidence rules — level UNKNOWN is never guessed, raw is verbatim.
+
+    No sockets, no analyzer, no model — normalize.load + detect only.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import normalize
+    from anomaly_detector import detect
+    import adapter
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nLog360 ingest (console/formats/log360.py):")
+
+    csv_path = ROOT / "samples" / "log360_export.csv"
+    sys_path_ = ROOT / "samples" / "log360_syslog.log"
+    bad_path = HERE / "formats" / "fixtures" / "log360_malformed.csv"
+
+    # --- CSV export ---------------------------------------------------------
+    records, stats = normalize.load(csv_path)
+    check("CSV export sniffed as log360_csv", stats["format"] == "log360_csv",
+          stats["format"])
+    check("CSV rows all parse (header is envelope, not an event)",
+          stats["parsed"] == 10 and stats["unparsed"] == 0,
+          f"parsed={stats['parsed']} unparsed={stats['unparsed']}")
+
+    by_n = {r["n"]: r for r in records}
+    src_lines = csv_path.read_text().splitlines()
+    r = by_n[2]
+    check("CSV Time -> ts", str(r["ts"]) == "2026-08-17 09:37:00+00:00", str(r["ts"]))
+    check("CSV Severity -> level (Error -> ERROR)", r["level"] == "ERROR", r["level"])
+    check("CSV Device -> host", r["host"] == "app-01", r["host"])
+    check("CSV Message -> msg (quoted comma preserved)",
+          r["msg"] == "Failed to connect to database, retrying in 5s", r["msg"])
+    check("CSV raw is the verbatim source row",
+          all(rec["raw"] == src_lines[rec["n"] - 1] for rec in records))
+
+    # Never guess: empty and unrecognized severity cells are UNKNOWN, not INFO.
+    check("empty severity -> UNKNOWN", by_n[9]["level"] == "UNKNOWN", by_n[9]["level"])
+    check("unrecognized severity ('Unknown') -> UNKNOWN",
+          by_n[10]["level"] == "UNKNOWN", by_n[10]["level"])
+    check("empty Device falls back to Source", by_n[9]["host"] == "monitor-02",
+          by_n[9]["host"])
+
+    types = {f["type"] for f in detect(records)}
+    check("CSV records produce findings (error burst + suspicious port)",
+          {"error_rate_spike", "suspicious_outbound"} <= types, str(types))
+
+    # --- Forwarded syslog ---------------------------------------------------
+    records, stats = normalize.load(sys_path_)
+    check("forwarded syslog sniffed as log360_syslog",
+          stats["format"] == "log360_syslog", stats["format"])
+    check("all forwarded lines parse", stats["parsed"] == 10 and stats["unparsed"] == 0,
+          f"parsed={stats['parsed']} unparsed={stats['unparsed']}")
+
+    src_lines = sys_path_.read_text().splitlines()
+    r = records[0]
+    check("syslog raw is the verbatim line, |PRI| envelope included",
+          all(rec["raw"] == src_lines[rec["n"] - 1] for rec in records))
+    check("|PRI| envelope stripped from msg", r["msg"].startswith("2026-08-17 09:37:02"),
+          r["msg"][:40])
+    check("syslog host parsed", r["host"] == "kali", r["host"])
+    check("explicit DEBUG token in message wins", r["level"] == "DEBUG", r["level"])
+    check("embedded full date -> ts (year is real, not inferred)",
+          str(r["ts"]) == "2026-08-17 09:37:02+00:00", str(r["ts"]))
+    # Line 8 has no level token; its level comes from the |28| envelope (28 % 8 = 4).
+    check("no token -> level from |PRI| envelope (|28| -> WARN)",
+          records[7]["level"] == "WARN", records[7]["level"])
+
+    types = {f["type"] for f in detect(records)}
+    check("syslog records produce findings (error burst + suspicious port)",
+          {"error_rate_spike", "suspicious_outbound"} <= types, str(types))
+
+    # --- Neither shape: the honest banner, never a fake-parse ---------------
+    records, stats = normalize.load(bad_path)
+    check("malformed file is NOT claimed as Log360", stats["format"] == "unknown",
+          stats["format"])
+    check("malformed file: 0 parsed, all lines surfaced as unparsed",
+          stats["parsed"] == 0 and stats["unparsed"] == 6,
+          f"parsed={stats['parsed']} unparsed={stats['unparsed']}")
+    state = adapter.adapt({"source_file": str(bad_path), "findings": [],
+                           "lines_parsed": 0, "lines_unparsed": stats["unparsed"]})
+    check("console state shows the unrecognized banner",
+          state["unrecognized"] and not state["emptyInput"])
+
+    # --- Regression: existing formats keep their exact prior classification --
+    for name, want in (("sample-2.log", "canonical"), ("samples/Linux_2k.log", "rfc3164")):
+        _, s = normalize.load(ROOT / name)
+        check(f"{name} still sniffs as {want}", s["format"] == want, s["format"])
+
+    # --- Picker: bundled CSV samples are offered ----------------------------
+    import serve
+    values = {s["value"] for s in serve.bundled_samples()}
+    check("picker offers the Log360 CSV sample", "samples/log360_export.csv" in values)
+    check("picker offers the Log360 syslog sample", "samples/log360_syslog.log" in values)
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -718,10 +824,11 @@ def main():
             print(result.stderr.strip()[:800])
 
     routing = check_server_routing()
-    if result.returncode or routing:
+    log360 = check_log360()
+    if result.returncode or routing or log360:
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing checks green")
+    print("\nPASSED — render + routing + log360 checks green")
     return 0
 
 

@@ -1,0 +1,10 @@
+|30|Aug 17 09:37:02 kali start.sh[1158]: 2026-08-17 09:37:02,481: DEBUG helpers.updater checking for updates
+|30|Aug 17 09:37:05 kali start.sh[1158]: 2026-08-17 09:37:05,102: INFO helpers.updater no update available
+|27|Aug 17 09:41:10 kali app[900]: 2026-08-17 09:41:10,003: ERROR db.pool connection failed (attempt 1)
+|27|Aug 17 09:41:18 kali app[900]: 2026-08-17 09:41:18,540: ERROR db.pool connection failed (attempt 2)
+|27|Aug 17 09:41:26 kali app[900]: 2026-08-17 09:41:26,077: ERROR db.pool connection failed (attempt 3)
+|27|Aug 17 09:41:34 kali app[900]: 2026-08-17 09:41:34,611: ERROR db.pool connection failed (attempt 4)
+|27|Aug 17 09:41:42 kali app[900]: 2026-08-17 09:41:42,145: ERROR db.pool giving up after 4 attempts
+|28|Aug 17 09:42:31 kali firewalld[512]: outbound connection to 198.51.100.23:4444 blocked by zone policy
+|30|Aug 17 09:43:00 kali sshd[1201]: Accepted publickey for ankit from 10.0.0.8 port 50412 ssh2
+|30|Aug 17 09:43:41 kali systemd[1]: Reloading.

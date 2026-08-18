@@ -32,6 +32,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import anomaly_detector as ad  # noqa: E402
 
+# Sibling format modules live under console/formats/ and feed the same record
+# dict; they are dispatched from here so every ingest path (CLI, picker,
+# upload, URL, adapter hydration) routes through one seam.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "console" / "formats"))
+import log360  # noqa: E402
+
 
 # "Mon DD HH:MM:SS host proc[pid]: message" — day may be space-padded ("Jul  3").
 RFC3164_RE = re.compile(
@@ -98,6 +104,12 @@ def _first_month(path):
 
 def sniff_format(path, probe_lines=50):
     """Decide the format from the first non-blank lines. Ties go to canonical."""
+    # Log360 shapes are sniffed first: their signatures (a CSV export header, a
+    # |PRI| envelope) are strict enough that nothing canonical or plain-rfc3164
+    # can match them, so existing formats keep their exact prior behaviour.
+    l360 = log360.sniff(path, probe_lines=probe_lines)
+    if l360:
+        return l360
     canonical = rfc3164 = seen = 0
     with open(path, "r", errors="replace") as f:
         for line in f:
@@ -193,6 +205,8 @@ def load(path):
         unparsed = [(n, line.rstrip("\n"))
                     for n, line in enumerate(open(path, errors="replace"), start=1)
                     if line.strip() and n not in matched]
+    elif fmt in ("log360_csv", "log360_syslog"):
+        records, unparsed, total = log360.load(path, fmt)
     elif fmt == "rfc3164":
         year, mtime_month = infer_base_year(path)
         first_month = _first_month(path)
