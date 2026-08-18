@@ -1380,6 +1380,51 @@ def check_dashboard_data():
     return 0 if all(results) else 1
 
 
+def check_layout_css():
+    """The scroll chain that keeps every finding reachable, asserted as CSS.
+
+    A headless DOM cannot measure a viewport, so the regression this guards —
+    the banded list clipping with no way to scroll to the rest of a band — is
+    pinned at the stylesheet level instead: the shell must degrade to a scroll
+    (never clip), the review area must keep a height floor, the list must be
+    its own scroller with a visible thumb, and the overview charts must be
+    height-capped so they cannot starve the list.
+    """
+    css = CONSOLE_HTML.read_text().split("</style>")[0]
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}"
+              + ("" if cond or not detail else f" — {detail}"))
+
+    def rule(selector):
+        m = re.search(re.escape(selector) + r"\{([^}]*)\}", css)
+        return m.group(1) if m else ""
+
+    print("\nlayout — the findings list is always reachable (crop regression guard):")
+    app = rule(".app")
+    check(".app degrades to scroll, never clips", "overflow:auto" in app
+          and "overflow:hidden" not in app, app)
+    check(".app keeps its height floor", "min-height:820px" in app)
+    body = rule(".body")
+    check(".body keeps a working height floor for the list", "min-height:420px" in body, body)
+    check(".list-pane stays shrinkable (scroll chain intact)",
+          "min-height:0" in rule(".list-pane"))
+    rows = rule(".rows")
+    check(".rows is the list's own scroller", "overflow:auto" in rows, rows)
+    check(".rows reserves a visible scrollbar gutter", "scrollbar-gutter:stable" in rows)
+    check("internal scrollers style a visible thumb",
+          "::-webkit-scrollbar-thumb" in css and ".rows::-webkit-scrollbar" in css)
+    check("overview stays flex:none (cannot grow over the list)",
+          "flex:none" in rule(".ovw"))
+    panel = rule(".ovw-grid>.panel")
+    check("overview panels are height-capped and scroll internally",
+          "max-height:230px" in panel and "overflow:auto" in panel, panel)
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -1419,10 +1464,11 @@ def main():
     log360 = check_log360()
     remote = check_remote_compute()
     dashboard = check_dashboard_data()
-    if result.returncode or routing or log360 or remote or dashboard:
+    layout = check_layout_css()
+    if result.returncode or routing or log360 or remote or dashboard or layout:
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data checks green")
+    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data + layout checks green")
     return 0
 
 
