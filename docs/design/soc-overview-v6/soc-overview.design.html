@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="26782240-c79e-459e-bae6-c12d4efa7c4a"></script>
+</head>
+<body>
+
+<x-dc>
+<helmet>
+<style>
+/* Tokens from console/overview.html's :root and web/src/index.css. No web
+   font and no external stylesheet — the stack falls back to system Inter. */
+:root{
+  --bg:#f4f5f8; --card:#ffffff; --ink:#1a2033; --ink-2:#5a6172; --ink-3:#8a90a2;
+  --line:#e4e6ee; --accent:#4f46e5; --accent-soft:#eef0fd; --accent-ink:#4f46e5;
+  --sev-critical:#991b1b; --sev-high:#ea580c; --sev-medium:#caa204; --sev-low:#166534;
+  --shadow:0 1px 2px rgba(26,32,51,.06),0 4px 14px rgba(26,32,51,.06);
+}
+.dark{
+  --bg:#161826; --card:#232532; --ink:#e9e9ed; --ink-2:#b2b6ca; --ink-3:#8a90a2;
+  --line:#33364a; --accent:#968ae0; --accent-soft:#3a3557; --accent-ink:#b5abfc;
+  --sev-critical:#b25353; --sev-high:#cd8036; --sev-medium:#827208; --sev-low:#3f9f83;
+  --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 14px rgba(0,0,0,.3);
+}
+body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+a{color:var(--accent-ink);text-decoration:none}
+a:hover{text-decoration:underline}
+*:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+</style>
+</helmet>
+
+<div class="{{ themeClass }}" style="display:flex;min-height:100vh;background:var(--bg);color:var(--ink)">
+
+  <aside style="width:172px;flex:none;display:flex;flex-direction:column;padding:18px 12px;background:var(--card);border-right:1px solid var(--line)">
+    <div style="padding:0 10px 22px">
+      <svg sc-camel-view-box="0 0 24 24" width="34" height="34" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="itsoc"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg>
+    </div>
+    <nav aria-label="Main" style="display:flex;flex-direction:column;gap:3px">
+      <a href="#" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;font-weight:600;background:var(--accent-soft);color:var(--accent-ink)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"></path><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>
+        Overview
+      </a>
+      <a href="#" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+        Alerts
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+        Incidents
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg>
+        Threat Intel
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><rect width="20" height="14" x="2" y="3" rx="2"></rect><line x1="8" x2="16" y1="21" y2="21"></line><line x1="12" x2="12" y1="17" y2="21"></line></svg>
+        Assets
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path></svg>
+        Reports
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path></svg>
+        Cases
+      </a>
+      <a href="#" title="Not built yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;padding:9px 11px;border-radius:8px;font-size:13.5px;text-decoration:none;color:var(--ink-2)" style-hover="background:var(--bg)">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+        Settings
+      </a>
+      <button disabled="" title="No session system yet — nothing behind this item" style="display:flex;align-items:center;gap:11px;margin-top:32px;padding:9px 11px;border:0;border-radius:8px;background:transparent;font:inherit;font-size:13.5px;text-align:left;color:var(--ink-2);opacity:0.55;cursor:not-allowed">
+        <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" x2="9" y1="12" y2="12"></line></svg>
+        Logout
+      </button>
+    </nav>
+  </aside><main style="flex:1;min-width:0;display:flex;flex-direction:column;gap:16px;padding:20px 22px">
+
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:12px">
+      <div>
+        <h1 style="margin:0;font-size:26px;font-weight:700;letter-spacing:-.015em">SOC Dashboard</h1>
+        <div style="margin-top:1px;font-size:14px;font-weight:500;color:var(--accent-ink)">Security Overview</div>
+      </div>
+      <div style="margin-left:auto;display:flex;flex-wrap:wrap;align-items:center;gap:10px">
+        <label title="Accepted: CSV, JSON, TXT, RAW, HTML — analyzed locally by the rules engine; results open in Alerts" style="display:inline-flex;align-items:center;gap:8px;padding:10px 15px;border:1px solid var(--accent);border-radius:10px;background:var(--accent);color:#fff;font-size:13.5px;font-weight:600;white-space:nowrap;cursor:pointer" style-hover="background:#4338ca">
+          <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" x2="12" y1="3" y2="15"></line></svg>
+          Upload Logs
+          <input type="file" multiple="" style="display:none">
+        </label>
+        <span title="The current run's own window. History-window filtering does not exist yet, so this states what is shown rather than offering a choice." style="display:inline-flex;align-items:center;gap:9px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);font-size:13.5px;white-space:nowrap;color:var(--ink-2)">
+          <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path></svg>
+          15 Jun – 26 Jul 2026
+        </span>
+        <button style="display:inline-flex;align-items:center;gap:9px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;white-space:nowrap;cursor:pointer" style-hover="background:var(--bg)">
+          <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path><path d="M8 16H3v5"></path></svg>
+          Refresh
+        </button>
+        <button disabled="" title="Filtering is not built yet — alert filters live on the Alerts page" style="display:inline-flex;align-items:center;gap:9px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;white-space:nowrap;opacity:0.5;cursor:not-allowed">
+          <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+          Filters
+        </button>
+        <button sc-camel-on-click="{{ toggleTheme }}" aria-label="{{ themeAria }}" title="Theme is saved for your next visit" style="display:inline-flex;align-items:center;gap:9px;padding:10px 14px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;white-space:nowrap;cursor:pointer" style-hover="background:var(--bg)">
+          <sc-if value="{{ isDark }}" hint-placeholder-val="{{ false }}">
+            <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2"></path><path d="M12 20v2"></path><path d="m4.93 4.93 1.41 1.41"></path><path d="m17.66 17.66 1.41 1.41"></path><path d="M2 12h2"></path><path d="M20 12h2"></path><path d="m6.34 17.66-1.41 1.41"></path><path d="m19.07 4.93-1.41 1.41"></path></svg>
+          </sc-if>
+          <sc-if value="{{ isLight }}" hint-placeholder-val="{{ true }}">
+            <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"></path></svg>
+          </sc-if>
+          {{ themeLabel }}
+        </button>
+      </div>
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 18px;font-size:11.5px;color:var(--ink-3)">
+      <span title="samples/Linux_2k.log" style="font-family:ui-monospace,Menlo,Monaco,monospace;font-size:12.5px;font-weight:600;color:var(--ink);border-bottom:1px dotted var(--line);cursor:help">Linux_2k.log</span>
+      <span>host combo</span>
+      <span><b style="color:var(--ink);font-variant-numeric:tabular-nums">2,000</b> lines parsed · 0 unparsed</span>
+      <span style="font-family:ui-monospace,Menlo,Monaco,monospace;font-size:10.5px">12:13–07:04 UTC · ruleset v1 · <span title="detector_sha256 43f0560f2a81d52a9b8909d4c0f3a537ef2059b343ea48acc7dba59b38312d05">detector 43f0560f…312d05</span> · llama3.1:8b · generated 2026-08-18 15:55 UTC</span>
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(148px, 1fr));gap:9px">
+
+      <div style="display:flex;align-items:center;gap:9px;border-radius:9px;background:var(--card);box-shadow:var(--shadow);padding:8px 11px">
+        <svg sc-camel-view-box="0 0 24 24" width="18" height="18" fill="none" stroke="var(--ink-3)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg>
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:600">Total Alerts</div>
+          <div style="font-size:18px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums">22</div>
+          <div style="font-size:9.5px;color:var(--ink-3)">no prior run — no delta</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:9px;border-radius:9px;background:var(--card);box-shadow:var(--shadow);padding:8px 11px">
+        <svg sc-camel-view-box="0 0 24 24" width="18" height="18" fill="none" stroke="var(--sev-critical)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M15.312 2a2 2 0 0 1 1.414.586l4.688 4.688A2 2 0 0 1 22 8.688v6.624a2 2 0 0 1-.586 1.414l-4.688 4.688a2 2 0 0 1-1.414.586H8.688a2 2 0 0 1-1.414-.586l-4.688-4.688A2 2 0 0 1 2 15.312V8.688a2 2 0 0 1 .586-1.414l4.688-4.688A2 2 0 0 1 8.688 2z"></path><path d="M12 8v4"></path><path d="M12 16h.01"></path></svg>
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:600;color:var(--sev-critical)">Critical</div>
+          <div style="font-size:18px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums">0</div>
+          <div style="font-size:9.5px;color:var(--ink-3)">no prior run — no delta</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:9px;border-radius:9px;background:var(--card);box-shadow:var(--shadow);padding:8px 11px">
+        <svg sc-camel-view-box="0 0 24 24" width="18" height="18" fill="none" stroke="var(--sev-high)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg>
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:600;color:var(--sev-high)">High</div>
+          <div style="font-size:18px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums">20</div>
+          <div style="font-size:9.5px;color:var(--ink-3)">no prior run — no delta</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:9px;border-radius:9px;background:var(--card);box-shadow:var(--shadow);padding:8px 11px">
+        <svg sc-camel-view-box="0 0 24 24" width="18" height="18" fill="none" stroke="var(--sev-medium)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><circle cx="12" cy="12" r="10"></circle><path d="M12 8v8"></path><path d="m8 12 4 4 4-4"></path></svg>
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:600;color:var(--sev-medium)">Medium</div>
+          <div style="font-size:18px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums">2</div>
+          <div style="font-size:9.5px;color:var(--ink-3)">no prior run — no delta</div>
+        </div>
+      </div>
+
+      <div style="display:flex;align-items:center;gap:9px;border-radius:9px;background:var(--card);box-shadow:var(--shadow);padding:8px 11px">
+        <svg sc-camel-view-box="0 0 24 24" width="18" height="18" fill="none" stroke="var(--sev-low)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path><path d="m9 12 2 2 4-4"></path></svg>
+        <div style="min-width:0">
+          <div style="font-size:11px;font-weight:600;color:var(--sev-low)">Low</div>
+          <div style="font-size:18px;font-weight:700;line-height:1.1;font-variant-numeric:tabular-nums">0</div>
+          <div style="font-size:9.5px;color:var(--ink-3)">no prior run — no delta</div>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(300px, 1fr));gap:16px;align-items:stretch">
+
+      <div style="min-width:0;border-radius:12px;background:var(--card);box-shadow:var(--shadow);padding:16px 18px">
+        <h3 style="margin:0 0 14px;font-size:15px;font-weight:600">Alerts by Severity</h3>
+        <div style="display:flex;flex-wrap:nowrap;align-items:center;gap:14px">
+          <svg width="118" height="118" sc-camel-view-box="0 0 120 120" role="img" aria-label="alerts by severity: 20 high, 2 medium" style="flex: none; width: 274px; height: 120px">
+            <sc-for list="{{ donutSegs }}" as="d" hint-placeholder-count="2">
+              <circle r="44" cx="60" cy="60" fill="none" stroke="{{ d.stroke }}" stroke-width="26" stroke-dasharray="{{ d.dash }}" stroke-dashoffset="{{ d.offset }}" transform="rotate(-90 60 60)"></circle>
+            </sc-for>
+            <sc-for list="{{ donutLabels }}" as="l" hint-placeholder-count="2">
+              <text x="{{ l.x }}" y="{{ l.y }}" text-anchor="middle" font-size="8.5" font-weight="700" fill="#fff">{{ l.count }}</text>
+            </sc-for>
+            <sc-for list="{{ donutLabels }}" as="l" hint-placeholder-count="2">
+              <text x="{{ l.x }}" y="{{ l.y2 }}" text-anchor="middle" font-size="6" fill="#fff">{{ l.pct }}</text>
+            </sc-for>
+            <text x="60" y="59" text-anchor="middle" font-size="19" font-weight="700" fill="currentColor">22</text>
+            <text x="60" y="71" text-anchor="middle" font-size="7.5" fill="var(--ink-3)">Total</text>
+          </svg>
+          
+        </div><ul aria-label="severity legend" style="flex:1;min-width:0;margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:7px;font-size:12px">
+            <sc-for list="{{ sevMix }}" as="s" hint-placeholder-count="4">
+              <li style="display:flex;align-items:center;gap:7px">
+                <i style="{{ s.dot }}"></i>
+                <span style="font-weight:600">{{ s.label }}</span>
+                <span style="margin-left:auto;white-space:nowrap;font-variant-numeric:tabular-nums;color:var(--ink-2)">{{ s.count }} ({{ s.pct }})</span>
+              </li>
+            </sc-for>
+          </ul>
+      </div>
+
+      <div style="min-width:0;border-radius:12px;background:var(--card);box-shadow:var(--shadow);padding:16px 18px">
+        <h3 style="margin:0 0 14px;font-size:15px;font-weight:600">Alerts Over Time</h3>
+        <div style="display:flex;gap:9px">
+          <div style="display:flex;flex-direction:column;justify-content:space-between;height:168px;font-size:11px;font-variant-numeric:tabular-nums;color:var(--ink-3)">
+            <span>2</span><span>1</span><span>0</span>
+          </div>
+          <div style="position:relative;flex:1;min-width:0;height:168px">
+            <div style="position:absolute;left:0;right:0;top:0;border-top:1px solid var(--line)"></div>
+            <div style="position:absolute;left:0;right:0;top:50%;border-top:1px solid var(--line)"></div>
+            <div style="position:absolute;left:0;right:0;bottom:0;border-top:1px solid var(--line)"></div>
+            <div role="img" aria-label="alerts over time" style="position:absolute;inset:0;display:flex;align-items:flex-end;gap:0">
+              <sc-for list="{{ bins }}" as="b" hint-placeholder-count="23">
+                <div title="{{ b.title }}" style="flex:1;min-width:0;height:100%;display:flex;align-items:flex-end;padding:0 2px">
+                  <div style="{{ b.style }}"></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:7px;padding-left:20px;display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-2)">
+          <span>15 Jun</span><span>23 Jun</span><span>01 Jul</span><span>11 Jul</span><span>26 Jul</span>
+        </div>
+        <div style="margin-top:14px;display:flex;flex-wrap:wrap;justify-content:center;gap:18px;font-size:12.5px;color:var(--ink-2)">
+          <sc-for list="{{ sevLegend }}" as="s" hint-placeholder-count="4">
+            <span style="display:flex;align-items:center;gap:7px"><i style="{{ s.dot }}"></i>{{ s.label }}</span>
+          </sc-for>
+        </div>
+      </div>
+
+      <div style="min-width:0;border-radius:12px;background:var(--card);box-shadow:var(--shadow);padding:16px 18px">
+        <h3 style="margin:0 0 3px;font-size:15px;font-weight:600">Top Attack Tactics (MITRE)</h3>
+        <p style="margin:0 0 14px;font-size:11.5px;color:var(--ink-3)">derived tags — not verdicts</p>
+        <ul aria-label="top attack tactics" style="margin:0;padding:0;list-style:none;display:flex;flex-direction:column;gap:11px">
+          <sc-for list="{{ tactics }}" as="t" hint-placeholder-count="1">
+            <li style="display:flex;align-items:center;gap:11px;font-size:13px">
+              <span title="{{ t.tactic }}" style="flex:none;width:132px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)">{{ t.tactic }}</span>
+              <svg sc-camel-view-box="0 0 100 14" sc-camel-preserve-aspect-ratio="none" role="img" aria-label="{{ t.aria }}" style="flex:1;height:14px;display:block"><rect x="0" y="2" width="{{ t.width }}" height="10" rx="2" fill="var(--accent)"></rect></svg>
+              <b style="flex:none;min-width:26px;text-align:right;font-variant-numeric:tabular-nums">{{ t.count }}</b>
+            </li>
+          </sc-for>
+        </ul>
+        <p style="margin:14px 0 0;font-size:11.5px;line-height:1.5;color:var(--ink-3)">One tactic is mapped in this run — every technique is T1110 Brute Force. The <span style="font-family:ui-monospace,Menlo,Monaco,monospace">error_rate_spike</span> finding maps to no tactic and is absent rather than bucketed.</p>
+      </div>
+
+    </div>
+
+    <div style="min-width:0;border-radius:12px;background:var(--card);box-shadow:var(--shadow);padding:16px 18px">
+      <h3 style="margin:0 0 12px;font-size:15px;font-weight:600">Latest Alerts <span style="font-weight:400;font-size:11.5px;color:var(--ink-3)">10 most recent of 22 · drill into Alerts for evidence</span></h3>
+      <div style="overflow-x:auto">
+        <sc-raw-table style="width:100%;min-width:940px;border-collapse:collapse;font-size:13px">
+          <sc-raw-thead>
+            <sc-raw-tr>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Time</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Severity</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Attacker Status</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Primary MITRE Tactics</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line);min-width:320px">Alert Name / Description</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Source</sc-raw-th>
+              <sc-raw-th style="text-align:left;font-size:12.5px;font-weight:600;color:var(--ink-2);padding:9px 10px;border-bottom:1px solid var(--line)">Action</sc-raw-th>
+            </sc-raw-tr>
+          </sc-raw-thead>
+          <sc-raw-tbody>
+            <sc-for list="{{ alerts }}" as="a" hint-placeholder-count="10">
+              <sc-raw-tr>
+                <sc-raw-td style="{{ a.tdTime }}">{{ a.time }}</sc-raw-td>
+                <sc-raw-td style="{{ a.td }}"><span style="{{ a.sevStyle }}"><i style="{{ a.dot }}"></i>{{ a.sevTitle }}</span></sc-raw-td>
+                <sc-raw-td style="{{ a.td }}"><span title="Derived kill-chain grouping of this alert's MITRE tactics — a display aid, not a verdict. Credential Access → Breaking In." style="white-space:nowrap">Breaking In</span></sc-raw-td>
+                <sc-raw-td style="{{ a.td }}"><span title="T1110 · Brute Force · Credential Access — derived, does not affect severity">Credential Access</span></sc-raw-td>
+                <sc-raw-td style="{{ a.td }}">{{ a.name }}</sc-raw-td>
+                <sc-raw-td style="{{ a.td }}"><span title="samples/Linux_2k.log" style="border-bottom:1px dotted var(--line);cursor:help">Linux_2k.log</span></sc-raw-td>
+                <sc-raw-td style="{{ a.td }}">
+                  <span style="display:inline-flex;align-items:center;gap:12px;color:var(--ink-3)">
+                    <a href="#" title="View this finding's evidence in Alerts" aria-label="View finding" style="display:inline-flex;color:inherit" style-hover="color:var(--accent-ink)">
+                      <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                    </a>
+                    <a href="#" title="Open this finding in the Alerts console" aria-label="Open finding" style="display:inline-flex;color:inherit" style-hover="color:var(--accent-ink)">
+                      <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h6v6"></path><path d="M10 14 21 3"></path><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path></svg>
+                    </a>
+                    <button disabled="" title="Row actions need case management — a later phase" aria-label="More actions" style="display:inline-flex;border:0;background:none;padding:0;color:inherit;opacity:0.5;cursor:not-allowed">
+                      <svg sc-camel-view-box="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="1"></circle><circle cx="12" cy="5" r="1"></circle><circle cx="12" cy="19" r="1"></circle></svg>
+                    </button>
+                  </span>
+                </sc-raw-td>
+              </sc-raw-tr>
+            </sc-for>
+          </sc-raw-tbody>
+        </sc-raw-table>
+      </div>
+    </div>
+
+    <div style="border-radius:12px;background:var(--card);box-shadow:var(--shadow);padding:18px 20px">
+      <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px, 1fr));gap:18px">
+        <sc-for list="{{ opsMetrics }}" as="m" hint-placeholder-count="6">
+          <div style="display:flex;align-items:center;gap:13px">
+            <sc-if value="{{ m.hasIcon }}" hint-placeholder-val="{{ true }}">
+              <svg sc-camel-view-box="0 0 24 24" width="27" height="27" fill="none" stroke="var(--ink-3)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:none"><path d="{{ m.icon }}"></path></svg>
+            </sc-if>
+            <div>
+              <div style="font-size:12.5px;color:var(--ink-2)">{{ m.label }}</div>
+              <div style="font-size:23px;font-weight:700;line-height:1.2;color:var(--ink-3)">—</div>
+            </div>
+          </div>
+        </sc-for>
+      </div>
+      <p style="margin:16px 0 0;font-size:12px;line-height:1.5;color:var(--ink-3)">
+        <b style="color:var(--ink-2)">Operational metrics — coming soon.</b> Open incidents, MTTD, MTTR and asset/user risk need incident-tracking subsystems that do not exist yet, so each shows a dash rather than an invented number.
+      </p>
+    </div>
+
+  </main>
+
+  
+
+  <div style="position:fixed;right:22px;bottom:22px;z-index:50;display:flex;flex-direction:column;align-items:flex-end;gap:10px">
+
+    <sc-if value="{{ chatOpen }}" hint-placeholder-val="{{ false }}">
+      <section aria-label="AI Analyst" style="width:340px;max-height:min(560px, calc(100vh - 120px));display:flex;flex-direction:column;gap:11px;border-radius:12px;background:var(--card);box-shadow:0 12px 32px -8px rgba(26,32,51,.28);padding:16px 18px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="font-size:14px;font-weight:600">AI Analyst (Ollama)</div>
+          <button sc-camel-on-click="{{ toggleChat }}" aria-label="Close analyst" style="margin-left:auto;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:6px;background:none;color:var(--ink-3);cursor:pointer" style-hover="background:var(--bg)">
+            <svg sc-camel-view-box="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"></path><path d="m6 6 12 12"></path></svg>
+          </button>
+        </div>
+        <div style="border:1px solid var(--line);border-radius:9px;background:var(--bg);padding:11px 13px;font-size:12.5px;line-height:1.5;color:var(--ink-2)">
+          Advisory only: the model explains findings in plain language. Severities and verdicts come from the deterministic rules and are never changed here.
+        </div>
+        <div aria-live="polite" style="flex:1;min-height:130px;overflow:auto;display:flex;flex-direction:column;gap:8px;font-size:12.5px">
+          <sc-if value="{{ chatEmpty }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <p style="margin:0;font-size:12.5px;line-height:1.5;color:var(--ink-2)">Ask me about your security data in natural language. Example:</p>
+              <sc-for list="{{ examples }}" as="q" hint-placeholder-count="3">
+                <button sc-camel-on-click="{{ q.onClick }}" style="text-align:left;font-size:12px;padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink-2);font-family:inherit;cursor:pointer" style-hover="border-color:var(--accent);color:var(--accent-ink)">{{ q.text }}</button>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-for list="{{ messages }}" as="m" hint-placeholder-count="0">
+            <div style="{{ m.style }}">{{ m.text }}</div>
+          </sc-for>
+        </div>
+        <form sc-camel-on-submit="{{ onSubmit }}" style="display:flex;gap:8px">
+          <input value="{{ draft }}" sc-camel-on-change="{{ onDraft }}" placeholder="Ask anything about your logs..." aria-label="Ask the AI analyst" style="flex:1;min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);font:inherit;font-size:13px">
+          <button type="submit" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:36px;border:1px solid var(--accent);border-radius:8px;background:var(--accent);color:#fff;cursor:pointer" style-hover="background:#4338ca">
+            <svg sc-camel-view-box="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"></path><path d="m21.854 2.147-10.94 10.939"></path></svg>
+          </button>
+        </form>
+        <div style="font-family:ui-monospace,Menlo,Monaco,monospace;font-size:11px;color:var(--ink-3)">Model: Ollama (llama3.1:8b)</div>
+      </section>
+    </sc-if>
+
+    <button sc-camel-on-click="{{ toggleChat }}" aria-label="{{ chatAria }}" style="display:inline-flex;align-items:center;gap:9px;padding:12px 18px;border:1px solid var(--accent);border-radius:999px;background:var(--card);color:var(--ink);font:inherit;font-size:13.5px;font-weight:600;box-shadow:var(--shadow);cursor:pointer" style-hover="background:var(--accent-soft)">
+      <svg sc-camel-view-box="0 0 24 24" width="17" height="17" fill="none" stroke="var(--accent)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 8V4H8"></path><rect width="16" height="12" x="4" y="8" rx="2"></rect><path d="M2 14h2"></path><path d="M20 14h2"></path><path d="M15 13v2"></path><path d="M9 13v2"></path></svg>
+      AI Analyst
+      <span style="font-size:9.5px;font-weight:500;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)">advisory</span>
+    </button>
+
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script="" data-props="{&quot;theme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;light&quot;,&quot;dark&quot;],&quot;default&quot;:&quot;light&quot;,&quot;tsType&quot;:&quot;\&quot;light\&quot; | \&quot;dark\&quot;&quot;}}">
+const SEV_KEY = { CRITICAL: "critical", HIGH: "high", MEDIUM: "medium", LOW: "low" };
+const SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+const COUNTS = { CRITICAL: 0, HIGH: 20, MEDIUM: 2, LOW: 0 };
+const TOTAL = 22;
+
+/** Hourly bins from the run's finding stamps: 23 bins, 22 findings, one bin
+ *  (10 Jul 16:00) holding two. No bin mixes severities in this run. */
+const BINS = [
+  ["15 Jun 12:00", 1, "HIGH"], ["20 Jun 09:00", 1, "HIGH"], ["21 Jun 08:00", 1, "HIGH"],
+  ["23 Jun 01:00", 1, "HIGH"], ["23 Jun 23:00", 1, "HIGH"], ["28 Jun 08:00", 1, "HIGH"],
+  ["28 Jun 21:00", 1, "HIGH"], ["30 Jun 20:00", 1, "MEDIUM"], ["01 Jul 00:00", 1, "HIGH"],
+  ["01 Jul 10:00", 1, "HIGH"], ["04 Jul 19:00", 1, "HIGH"], ["05 Jul 13:00", 1, "HIGH"],
+  ["06 Jul 02:00", 1, "HIGH"], ["10 Jul 16:00", 2, "HIGH"], ["11 Jul 03:00", 1, "HIGH"],
+  ["11 Jul 17:00", 1, "HIGH"], ["12 Jul 06:00", 1, "HIGH"], ["19 Jul 07:00", 1, "HIGH"],
+  ["20 Jul 23:00", 1, "HIGH"], ["21 Jul 01:00", 1, "MEDIUM"], ["23 Jul 20:00", 1, "HIGH"],
+  ["24 Jul 08:00", 1, "HIGH"], ["26 Jul 07:00", 1, "HIGH"],
+];
+
+/** The ten most recent findings by stamp, as /api/overview orders them:
+ *  time is stamp[:19] with the T replaced, exactly as serve.py emits it. */
+const ALERTS = [
+  ["2026-07-26 07:04:12", "HIGH", "Brute-force login attempts for 'root' from 207.243.167.114"],
+  ["2026-07-24 08:31:59", "HIGH", "Brute-force login attempts for 'root' from 203.251.225.101"],
+  ["2026-07-23 20:04:42", "HIGH", "Brute-force login attempts for 'root' from 211.9.58.217"],
+  ["2026-07-21 01:30:50", "MEDIUM", "Brute-force login attempts for 'root' from 210.76.59.29"],
+  ["2026-07-20 23:37:46", "HIGH", "Brute-force login attempts for 'unknown' from 218.55.234.102"],
+  ["2026-07-19 07:35:41", "HIGH", "Brute-force login attempts for 'root' from 202.181.236.180"],
+  ["2026-07-12 06:09:45", "HIGH", "Brute-force login attempts for 'unknown' from 68.143.156.89"],
+  ["2026-07-11 17:58:23", "HIGH", "Brute-force login attempts for 'root' from 211.137.205.253"],
+  ["2026-07-11 03:46:19", "HIGH", "Brute-force login attempts for 'root' from 82.77.200.128"],
+  ["2026-07-10 16:33:05", "HIGH", "Brute-force login attempts for 'root' from 211.214.161.141"],
+];
+
+const EXAMPLES = [
+  "Show me top 5 critical alerts",
+  "What are the recent attack patterns?",
+  "Summarize today's threats",
+];
+
+/** lucide Shield / Monitor / User / Database, for the metrics band. */
+const OPS = [
+  ["Open Incidents", "M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"],
+  ["MTTD", null],
+  ["MTTR", null],
+  ["Assets at Risk", "M4 17V5a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v12M8 21h8M12 17v4"],
+  ["Users at Risk", "M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0"],
+  ["Data Sources", "M3 5c0-1.7 4-3 9-3s9 1.3 9 3v14c0 1.7-4 3-9 3s-9-1.3-9-3zM3 12c0 1.7 4 3 9 3s9-1.3 9-3"],
+];
+
+/** No /api/ask is reachable from a mockup, so the panel says so rather than
+ *  inventing an analyst answer. */
+const OFFLINE_REPLY =
+  "This mockup has no analyst backend attached. Run python3 console/serve.py with Ollama on localhost and the same question is answered from the current run's findings summary.";
+
+class Component extends DCLogic {
+  // Closed on first paint so the fixed panel never covers the dashboard.
+  state = { theme: null, chatOpen: false, draft: "", messages: [] };
+
+  get theme() {
+    return this.state.theme ?? this.props.theme ?? "light";
+  }
+
+  ask(question) {
+    const q = String(question).trim();
+    if (!q) return;
+    this.setState((s) => ({
+      draft: "",
+      messages: [...s.messages, { who: "q", text: q }, { who: "a", text: OFFLINE_REPLY }],
+    }));
+  }
+
+  renderVals() {
+    const td = "padding:11px 10px;border-bottom:1px solid var(--line);vertical-align:middle";
+    const msg = "padding:8px 11px;border-radius:10px;max-width:95%;white-space:pre-wrap";
+    const dot = (key, px) => `width:${px}px;height:${px}px;border-radius:50%;flex:none;background:var(--sev-${key})`;
+    const pct = (n) => (TOTAL ? Math.round((n / TOTAL) * 1000) / 10 : 0);
+
+    // overview.html's donut geometry, thickened so each arc can carry its own
+    // count and percent the way the reference does.
+    const R = 44, C = 2 * Math.PI * R;
+    let off = 0;
+    const present = SEV_ORDER.filter((b) => COUNTS[b] > 0);
+    const donutSegs = [];
+    const donutLabels = [];
+    present.forEach((b) => {
+      const frac = COUNTS[b] / TOTAL;
+      donutSegs.push({
+        stroke: `var(--sev-${SEV_KEY[b]})`,
+        dash: `${(frac * C - 2).toFixed(1)} ${(C - frac * C + 2).toFixed(1)}`,
+        offset: (-off * C).toFixed(1),
+      });
+      // Mid-arc angle, measured from 12 o'clock like the stroke rotation.
+      const mid = (off + frac / 2) * 2 * Math.PI - Math.PI / 2;
+      donutLabels.push({
+        count: String(COUNTS[b]),
+        pct: `(${pct(COUNTS[b])}%)`,
+        x: (60 + R * Math.cos(mid)).toFixed(1),
+        y: (60 + R * Math.sin(mid) + 1).toFixed(1),
+        y2: (60 + R * Math.sin(mid) + 8).toFixed(1),
+      });
+      off += frac;
+    });
+
+    return {
+      themeClass: this.theme === "dark" ? "dark" : "",
+      toggleTheme: () => this.setState({ theme: this.theme === "dark" ? "light" : "dark" }),
+      isDark: this.theme === "dark",
+      isLight: this.theme !== "dark",
+      themeLabel: this.theme === "dark" ? "Light" : "Dark",
+      themeAria: this.theme === "dark" ? "Switch to light mode" : "Switch to dark mode",
+
+      chatOpen: this.state.chatOpen,
+      chatAria: this.state.chatOpen ? "Close AI Analyst" : "Open AI Analyst",
+      chatEmpty: this.state.messages.length === 0,
+      toggleChat: () => this.setState((s) => ({ chatOpen: !s.chatOpen })),
+      draft: this.state.draft,
+      onDraft: (e) => this.setState({ draft: e.target.value }),
+      onSubmit: (e) => { e.preventDefault(); this.ask(this.state.draft); },
+      messages: this.state.messages.map((m) => ({
+        text: m.text,
+        style: m.who === "q"
+          ? `${msg};background:var(--accent-soft);color:var(--accent-ink);align-self:flex-end`
+          : `${msg};background:var(--bg);color:var(--ink-2)`,
+      })),
+      examples: EXAMPLES.map((text) => ({ text, onClick: () => this.ask(text) })),
+
+      donutSegs,
+      donutLabels,
+
+      sevMix: SEV_ORDER.map((b) => ({
+        label: b.charAt(0) + b.slice(1).toLowerCase(),
+        count: COUNTS[b], pct: `${pct(COUNTS[b])}%`, dot: dot(SEV_KEY[b], 10),
+      })),
+      // The chart legend reads bottom-to-top, matching the stack order.
+      sevLegend: [...SEV_ORDER].reverse().map((b) => ({
+        label: b.charAt(0) + b.slice(1).toLowerCase(), dot: dot(SEV_KEY[b], 10),
+      })),
+
+      bins: BINS.map(([t, n, sev]) => ({
+        title: `${t} — ${sev.toLowerCase()}: ${n}`,
+        style: `width:100%;border-radius:2px 2px 0 0;height:${n === 2 ? 100 : 50}%;background:var(--sev-${SEV_KEY[sev]})`,
+      })),
+
+      tactics: [{ tactic: "Credential Access", count: 21, width: "100", aria: "Credential Access: 21" }],
+
+      opsMetrics: OPS.map(([label, icon]) => ({ label, icon: icon ?? "", hasIcon: !!icon })),
+
+      alerts: ALERTS.map(([time, sev, name]) => ({
+        time, name, td,
+        sevTitle: sev.charAt(0) + sev.slice(1).toLowerCase(),
+        dot: dot(SEV_KEY[sev], 9),
+        sevStyle: `display:inline-flex;align-items:center;gap:8px;font-weight:600;white-space:nowrap;color:var(--sev-${SEV_KEY[sev]})`,
+        tdTime: `${td};white-space:nowrap`,
+      })),
+    };
+  }
+}
+</script>
+
+
+</body></html>

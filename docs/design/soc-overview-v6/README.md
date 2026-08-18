@@ -1,13 +1,22 @@
-# SOC Overview — v6 design reference
+# SOC Overview — design reference
 
 New design drop from the user (2026-08-18). This is the **canonical visual spec for the
 React Overview page** and the shared app shell. Plug it into `web/` — do NOT ship the raw
 files; they are a reference to port to React + Tailwind.
 
-## Files
-- `SOC-Dashboard-v6.dc.html` — the design (latest of v2–v6). Open in a browser with
-  `support.js` alongside to render it. It is an AI design-canvas export, so it contains
-  a few non-standard bits to translate, not copy verbatim:
+## Files (use these two)
+- **`SOC-Dashboard-standalone.html`** — the CURRENT, corrected design, **renders on its own**
+  in a browser (open it directly — no support.js needed). This is the authoritative target;
+  open it and match it pixel-for-feel in both light and dark.
+- **`soc-overview.design.html`** — the readable markup/CSS extracted from that bundle (same
+  518-line source as v6). Use this to read the exact structure, tokens, and honest-state copy.
+  Same `<x-dc>`/`<helmet>`/`{{ themeClass }}`/`style-hover` quirks to TRANSLATE (see below).
+
+## Older (superseded — kept for history)
+- `SOC-Dashboard-v6.dc.html` + `support.js` — earlier export that only renders WITH support.js.
+  Structurally identical to the standalone; the standalone is the one to build against.
+  It is an AI design-canvas export, so it contains a few non-standard bits to translate,
+  not copy verbatim:
   - `<x-dc>` / `<helmet>` wrappers — drop them; the real content is the `<div class="{{ themeClass }}">…`.
   - `{{ themeClass }}` — bind to the app's existing theme store (adds `dark` class).
   - `style-hover="…"` custom attributes — reimplement as Tailwind `hover:` classes / CSS.
