@@ -1,25 +1,30 @@
-import { screen } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import App from "@/App";
-import { renderApp, mockFetch, OVERVIEW } from "./helpers";
+import { renderApp, mockFetch, OVERVIEW, METRICS } from "./helpers";
 
-describe("uniform app shell", () => {
-  beforeEach(() => mockFetch({ "/api/overview": OVERVIEW }));
+describe("uniform v6 app shell", () => {
+  beforeEach(() => mockFetch({ "/api/overview": OVERVIEW, "/api/metrics": METRICS }));
 
-  it("renders every nav item, with unbuilt sections marked", async () => {
+  it("renders every nav item, with unbuilt sections honestly titled", async () => {
     renderApp(<App />);
     for (const item of ["Overview", "Alerts", "Incidents", "Threat Intel",
                         "Assets", "Reports", "Cases", "Settings", "Logout"]) {
       expect(screen.getByText(item)).toBeInTheDocument();
     }
-    // 7 unbuilt items carry the honest "soon" tag (6 nav + logout).
-    expect(screen.getAllByText("soon").length).toBe(7);
-    expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
+    // v6 drops the "soon" pills: unbuilt nav items carry a title instead, and
+    // Logout is a disabled button with its own honest title.
+    const nav = screen.getByRole("navigation", { name: "Main" });
+    expect(within(nav).getAllByTitle(/not built yet/i).length).toBe(6);
+    expect(screen.getByText("Logout").closest("button")).toBeDisabled();
   });
 
-  it("renders the topbar with title, refresh and the theme toggle", async () => {
+  it("renders the v6 header actions on every page", async () => {
     renderApp(<App />);
     expect(screen.getByRole("heading", { name: "SOC Dashboard" })).toBeInTheDocument();
+    expect(screen.getByText("Upload Logs")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    // Filters exists but is honestly disabled until filtering is built.
+    expect(screen.getByRole("button", { name: /filters/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /switch to dark mode/i })).toBeInTheDocument();
   });
 

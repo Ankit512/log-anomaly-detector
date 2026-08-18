@@ -1,9 +1,9 @@
 /** Typed client for the EXISTING Python console API (serve.py, 127.0.0.1:8765).
  *  Every shape below mirrors what the backend actually emits today — nothing
- *  here invents fields the server does not send. Sections the backend does not
- *  cover yet (Incidents, Assets, Cases, Reports, Threat Intel pages) have NO
- *  client here on purpose: they are Phase B backend work, and their pages say
- *  "coming in a later phase" instead of consuming a fake. */
+ *  here invents fields the server does not send. The Phase B SOC subsystems
+ *  (console/soc.py, contract in docs/soc_subsystems.md) are consumed only
+ *  where a page exists for them: the Overview's ops footer reads /api/metrics,
+ *  which aggregates incidents, assets, users and run history server-side. */
 
 export interface Delta { pct: number; dir: "up" | "down" }
 
@@ -69,8 +69,20 @@ export interface ConsoleState {
   emptyInput?: boolean;
   compareRun?: boolean;
   findings: Finding[];
-  manifest?: Record<string, unknown>;
+  manifest?: { detector_sha256?: string | null; ruleset?: string | null } & Record<string, unknown>;
   sourceLabel?: string;
+}
+
+/** /api/metrics — soc.metrics(): every value is derived or null, never guessed.
+ *  mttd/mttr are null until incidents carry real acknowledge/resolve stamps;
+ *  the *Basis fields say how many incidents each mean is computed from. */
+export interface Metrics {
+  openIncidents: number;
+  mttdSeconds: number | null; mttdBasis: number;
+  mttrSeconds: number | null; mttrBasis: number;
+  assetsAtRisk: number | null;
+  usersAtRisk: number | null;
+  dataSources: number;
 }
 
 export interface RunSummary {
@@ -88,6 +100,7 @@ export const api = {
   overview: () => getJson<OverviewResponse>("/api/overview"),
   consoleState: () => getJson<ConsoleState>(`/console_state.json?t=${Date.now()}`),
   runsSummary: () => getJson<{ runs: RunSummary[] }>("/api/runs-summary"),
+  metrics: () => getJson<Metrics>("/api/metrics"),
 
   ask: async (question: string): Promise<{ answer?: string; error?: string }> => {
     const res = await fetch("/api/ask", {
