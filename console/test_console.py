@@ -1380,6 +1380,170 @@ def check_dashboard_data():
     return 0 if all(results) else 1
 
 
+def check_allruns():
+    """Run history: switching returns the run you asked for (proven over real
+    HTTP), and /api/runs-summary aggregates EVERY saved run — combined severity
+    counts, combined MITRE frequency, nothing silently dropped."""
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.request
+    import adapter
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nall-runs — switcher round-trip and aggregate summary:")
+
+    real_runs_dir, real_state_file = serve.RUNS_DIR, serve.STATE_FILE
+    real_state, real_current = serve.STATE, serve.CURRENT_RUN_FILE
+    try:
+        with tempfile.TemporaryDirectory(prefix="allruns-test-") as tmp:
+            tmp = Path(tmp)
+            serve.RUNS_DIR = tmp / ".runs"
+            serve.STATE_FILE = tmp / "console_state.json"
+
+            def make_state(stem, hour, log_lines, findings):
+                log = tmp / f"{stem}.log"
+                log.write_text("\n".join(log_lines) + "\n")
+                report = {"source_file": str(log),
+                          "generated_at": f"2026-08-18T{hour:02d}:00:00+00:00",
+                          "lines_parsed": len(log_lines), "lines_unparsed": 0,
+                          "findings": findings}
+                s = adapter.adapt(report)
+                s["idle"] = False
+                s["sourceLabel"] = f"{stem}.log"
+                return s
+
+            line = "2026-08-13T02:16:{s:02d}Z {lvl} host-1 {msg}"
+            attack = [line.format(s=44 + i, lvl="ERROR",
+                                  msg="auth failed for user 'admin' from 203.0.113.44")
+                      for i in range(5)] + [line.format(s=52, lvl="INFO", msg="auth success")]
+            noisy = [line.format(s=i, lvl="ERROR", msg=f"upstream timeout {i}") for i in range(3)]
+            clean = [line.format(s=i, lvl="INFO", msg=f"heartbeat {i}") for i in range(4)]
+
+            f_success = {"source": "detector", "severity": "critical",
+                         "rule_id": "auth_bruteforce_success", "summary": "compromise",
+                         "evidence": "lines 1-5", "entities": {"ip": "203.0.113.44"},
+                         "timeline": [{"t": "02:16:52", "label": "s", "line": 6,
+                                       "ts": "2026-08-13T02:16:52+00:00"}]}
+            f_brute = {"source": "detector", "severity": "high",
+                       "rule_id": "auth_bruteforce", "summary": "burst",
+                       "evidence": "", "entities": {"ip": "203.0.113.44"},
+                       "timeline": [{"t": "02:16:45", "label": "b", "line": 2,
+                                     "ts": "2026-08-13T02:16:45+00:00"}]}
+            f_spike = {"source": "detector", "severity": "medium",
+                       "rule_id": "error_rate_spike", "summary": "spike",
+                       "evidence": "lines 1-3", "entities": {},
+                       "timeline": [{"t": "02:16:00", "label": "e", "line": 1,
+                                     "ts": "2026-08-13T02:16:00+00:00"}]}
+
+            oldest = make_state("clean", 10, clean, [])
+            middle = make_state("noisy", 11, noisy, [f_spike])
+            newest = make_state("attack", 12, attack, [f_success, f_brute])
+
+            # --- save_run: same-second re-save must not overwrite history ---
+            n1 = serve.save_run(oldest)
+            dup = serve.save_run(oldest)
+            check("same-second same-source saves get distinct files",
+                  dup != n1 and dup.endswith("-2.json"), str(dup))
+            (serve.RUNS_DIR / dup).unlink()
+            n2 = serve.save_run(middle)
+            n3 = serve.save_run(newest)
+
+            listed = serve.list_runs()
+            check("three saved runs listed, newest first",
+                  [r["file"] for r in listed] == [n3, n2, n1],
+                  str([r["file"] for r in listed]))
+
+            # --- switcher over real HTTP: /api/open returns the run asked for
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req) as r:
+                    return json.loads(r.read())
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
+                    return json.loads(r.read())
+
+            try:
+                opened_a = post("/api/open", {"file": n3})
+                opened_b = post("/api/open", {"file": n2})
+                check("/api/open on run B returns run B's state (not A)",
+                      opened_b.get("runId") == middle["runId"]
+                      and opened_b.get("runId") != opened_a.get("runId"),
+                      str(opened_b.get("runId")))
+                check("server state follows the switch",
+                      get("/console_state.json").get("runId") == middle["runId"])
+
+                summary = get("/api/runs-summary")
+            finally:
+                srv.shutdown()
+
+            # --- aggregate: all runs, combined counts, combined techniques --
+            runs, totals = summary["runs"], summary["totals"]
+            check("summary lists all 3 runs, newest first",
+                  [r["file"] for r in runs] == [n3, n2, n1], str([r["file"] for r in runs]))
+            check("totals.runCount == 3", totals["runCount"] == 3, str(totals["runCount"]))
+            check("per-run entries carry id/label/lines/findings",
+                  runs[0]["runId"] == newest["runId"]
+                  and runs[0]["sourceLabel"] == "attack.log"
+                  and runs[0]["linesParsed"] == 6 and runs[0]["findingCount"] == 2)
+            expected = {b: sum(s["severityCounts"][b] for s in (oldest, middle, newest))
+                        for b in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN")}
+            check("combined severityCounts == sum of per-run counts",
+                  totals["severityCounts"] == expected,
+                  f"{totals['severityCounts']} != {expected}")
+            check("totals lines/findings are sums",
+                  totals["linesParsed"] == 13 and totals["findingCount"] == 3)
+            freq = totals["mitreFrequency"]
+            check("combined mitreFrequency ranked: T1110 x2 then T1078 x1",
+                  [(t["id"], t["count"]) for t in freq] == [("T1110", 2), ("T1078", 1)],
+                  str(freq))
+            check("unmapped rule contributes no technique anywhere",
+                  runs[1]["topTechniques"] == [])
+            check("per-run counts are marked complete", all(r["dataComplete"] for r in runs))
+
+            # --- legacy + unreadable history entries: flagged, never dropped
+            legacy = {"runId": "legacy-run", "generatedAt": "2026-08-18T09:00:00+00:00",
+                      "sourceLabel": "old.log", "linesParsed": 5,
+                      "findings": [{"id": "detector-0", "sev": "HIGH",
+                                    "mitre": [{"id": "T1110", "name": "Brute Force",
+                                               "tactic": "Credential Access"}]}]}
+            (serve.RUNS_DIR / "20260818T090000-legacy-run.json").write_text(json.dumps(legacy))
+            (serve.RUNS_DIR / "20260818T080000-corrupt.json").write_text("{not json")
+            summary2 = serve.runs_summary()
+            by_file = {r["file"]: r for r in summary2["runs"]}
+            leg = by_file["20260818T090000-legacy-run.json"]
+            check("legacy run (no stored counts) is flagged, not guessed",
+                  leg["dataComplete"] is False
+                  and sum(leg["severityCounts"].values()) == 0)
+            check("legacy techniques recomputed from its findings' mitre lists",
+                  leg["topTechniques"] and leg["topTechniques"][0]["id"] == "T1110")
+            check("legacy technique joins the combined frequency",
+                  summary2["totals"]["mitreFrequency"][0]["count"] == 3)
+            check("corrupt history file surfaced as unreadable, not dropped",
+                  by_file["20260818T080000-corrupt.json"].get("unreadable") is True
+                  and summary2["totals"]["runCount"] == 5)
+    finally:
+        serve.RUNS_DIR, serve.STATE_FILE = real_runs_dir, real_state_file
+        serve.STATE, serve.CURRENT_RUN_FILE = real_state, real_current
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -1419,10 +1583,12 @@ def main():
     log360 = check_log360()
     remote = check_remote_compute()
     dashboard = check_dashboard_data()
-    if result.returncode or routing or log360 or remote or dashboard:
+    allruns = check_allruns()
+    if result.returncode or routing or log360 or remote or dashboard or allruns:
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data checks green")
+    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data "
+          "+ all-runs checks green")
     return 0
 
 
