@@ -425,8 +425,9 @@ in behind a progress bar. You never wait on the model to see what was found.
   corpus (17 cases) and public datasets, not your environment.
 - **Thresholds are generic.** 5 failed logins, 80% disk — sensible defaults, not
   tuned to your systems.
-- **Analyst marks are not persisted** across a reopened run.
-- **Explanations generated on demand** are not saved back into run history.
+- **Marks and on-demand explanations are saved** into the run, so reopening it shows the
+  review you already did. They live in `console/.runs/` on this machine only — nothing is
+  uploaded, and deleting that folder deletes the review with it.
 
 ---
 

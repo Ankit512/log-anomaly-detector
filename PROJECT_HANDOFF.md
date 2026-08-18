@@ -189,13 +189,17 @@ python3 console/test_console.py           # console render smoke test
 - **Small-model drift.** `llama3.1:8b` abandons the JSON schema on dense 100-line chunks. It
   now **fails loudly** (`analyzer_error`), not silently. Mitigate with a smaller
   `--lines-per-chunk` or a larger model.
-- **LLM explanation coverage.** The model occasionally skips a `rule_id` (renders `n/a`).
-  Optional fix: a second pass for missing ids.
+- **LLM explanation coverage.** The model occasionally skips a `rule_id`, or writes one
+  explanation for two same-type findings and names only one host. Those findings used to
+  render `n/a` forever. A second pass now re-asks for each one individually (capped at
+  `SECOND_PASS_MAX`, 6 per run); whatever it still cannot explain stays pending and is
+  explained on demand, never filled with a placeholder. Deferred chunks are deliberately
+  excluded — pulling them in would undo the wall-time bound.
 - **Eval baseline caveat.** 15/15 / precision 1.000 means "unchanged vs known behaviour," not
   "correct in the wild." Its value is the next regression it catches; true accuracy needs
   production logs.
 - **Compare-mode headline is ~21%, not a landslide.** A six-input benchmark at 25-line chunks
-  (`benchmark_compare.md`, uncommitted) measured 3 of 14 comparable findings under-rated, with
+  (`benchmark_compare.md`, in the repo) measured 3 of 14 comparable findings under-rated, with
   the model *over*-rating 4 — and 2 of the 3 under-rated cases come from the synthetic
   `sample-2.log`. On real syslog it is 1 of 10. The defensible claim is narrower than a
   percentage: **the rules catch correlation the model doesn't** (failure→success compromise,
@@ -204,8 +208,12 @@ python3 console/test_console.py           # console render smoke test
 - **Explanations are partial by design on large logs.** Only the top-3 findings are explained
   eagerly; the rest are generated on demand when opened (~14s each). Anything deterministic —
   severity, evidence, rule predicate, timeline — is always complete.
-- **Not persisted:** analyst marks, and on-demand explanations generated after a run is
-  reopened from history.
+- **Persisted since Aug 2026:** analyst marks and on-demand explanations are written back
+  into the saved run (`POST /api/mark` → `persist_state()`), so a refresh, a restart or
+  reopening a run tomorrow shows the review already done. Run history is ordered by the
+  timestamp in the filename, not mtime — rewriting a run on every mark would otherwise
+  have promoted it to "newest". Runs started from the shell (`--input` / `--report`) are
+  saved to history too, which they previously were not.
 
 ---
 
@@ -215,9 +223,13 @@ python3 console/test_console.py           # console render smoke test
 - Review console + `serve.py` are live: one command from a log to a browser-reviewed run,
   fully local. `--compare` shows the RULE-vs-LLM-alone contrast. CI runs the eval, threat-intel,
   and console tests headless on every push.
-- Remaining on the console: eyeball the rendered visuals + severity colour contrast on the dark
-  theme (verified numerically — hue/contrast — but never seen in a browser in-session).
-- Persist analyst marks and on-demand explanations back into run history.
+- The console has now been opened in a real browser (headless Chrome, 1440px and 820px, plus a
+  standalone export over `file://`). The dark theme and severity ramp read correctly. It found
+  one thing no headless check could: below ~1000px the fixed 520px list pane and the
+  non-wrapping header pushed the page wider than the window, so the detail pane was clipped
+  mid-word. A breakpoint now stacks the panes. It also surfaced a `var(--space-5)` typo — an
+  undefined token silently zeroes the whole declaration — which `test_console.py` now guards
+  against for every variable in the stylesheet.
 - More formats (RFC 5424, JSON logs, vendor exports); each is a sibling module, not a detector
   edit. A macOS unified log currently reports "format not recognized" — correctly, but it is
   the obvious next parser.

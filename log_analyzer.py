@@ -87,6 +87,14 @@ MAX_COMPLETION_TOKENS = None
 # costs the same first-paint as a 19-line one. Rules still cover every line.
 EAGER_EXPLANATIONS = 3
 
+# A chunk we already read can still come back with a finding unexplained: the model
+# skips a rule id, or writes one explanation for two same-type findings and names only
+# one host. Those used to render "n/a" forever. We re-ask for each such finding
+# individually — the chunk is already selected, so this is prose we meant to have.
+# Bounded, because in --deep-scan every chunk is selected and the tail is not worth
+# minutes of wall time; whatever is left over is still explained on demand.
+SECOND_PASS_MAX = 6
+
 # Ollama unloads an idle model after ~5 minutes by default, so the first call of a
 # run pays ~9s of load time. Pinning it at preflight removes that from the run.
 OLLAMA_KEEP_ALIVE = "30m"
@@ -411,6 +419,38 @@ def analyze_chunk(base_url, api_key, model, chunk_lines, chunk_index, ctx):
     return parsed
 
 
+def explain_single(base_url, api_key, model, chunk_lines, chunk_index, ctx,
+                   rule_id=None, ident=None):
+    """Ask for the prose of ONE finding and return it, or "" if nothing usable came back.
+
+    The context names a single finding, so an explanation with no rule id is taken to
+    be about it. `ident` (an IP or host) is the tie-break for the one case where that
+    assumption breaks: two findings of the same type in the same chunk. Prose about the
+    wrong host is worse than no prose, so a reply that never names `ident` is refused.
+
+    Shared by the analyzer's second pass and the console's on-demand button so both
+    accept an answer on exactly the same terms.
+    """
+    result = analyze_chunk(base_url, api_key, model, chunk_lines, chunk_index, ctx)
+    for ex in result.get("explanations", []):
+        text = ex.get("explanation")
+        if not text:
+            continue
+        rid = ex.get("rule_id")
+        if rid and rule_id and rid != rule_id:
+            continue
+        if ident and ident not in text:
+            continue
+        return text
+    return ""
+
+
+def anomaly_ident(anomaly):
+    """The address or host that identifies a finding, when it has one."""
+    ents = anomaly.get("entities") or {}
+    return next((str(ents[k]) for k in ("ip", "dest_ip", "host") if ents.get(k)), None)
+
+
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
 
@@ -708,9 +748,7 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
                 # where the prose actually refers to that finding; the others stay
                 # pending and get their own on demand. Prose about the wrong host is
                 # worse than no prose.
-                ents = anomalies[j].get("entities") or {}
-                ident = next((str(ents[k]) for k in ("ip", "dest_ip", "host")
-                              if ents.get(k)), None)
+                ident = anomaly_ident(anomalies[j])
                 if ident and ident not in text:
                     continue
                 explanations.setdefault(j, text)
@@ -735,6 +773,38 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
             finding.setdefault("summary", "(model omitted a summary for this finding)")
             llm_findings.append(finding)
         chunk_summaries.append(result.get("chunk_summary", ""))
+
+    # Second pass: findings whose chunk we already explained but which came back
+    # without prose. Asking again for one finding at a time removes the ambiguity that
+    # lost them the first time — the context names one finding, so there is nothing for
+    # the model to conflate. Deferred chunks are deliberately NOT pulled in here; those
+    # are the on-demand budget and re-asking them would undo the wall-time bound.
+    missing = [j for idx in selected for j in by_chunk.get(idx, [])
+               if j not in explanations]
+    if missing:
+        retry, skipped = missing[:SECOND_PASS_MAX], missing[SECOND_PASS_MAX:]
+        print(f"  {len(missing)} finding(s) came back unexplained; re-asking for "
+              f"{len(retry)} individually...")
+        if skipped:
+            print(f"    {len(skipped)} left for on-demand (cap is {SECOND_PASS_MAX} "
+                  f"per run) — they keep their rule verdict and evidence either way.")
+        for j in retry:
+            idx = next(i for i in selected if j in by_chunk.get(i, []))
+            _, chunk_lines = all_chunks[idx]
+            same_type = sum(1 for k in by_chunk.get(idx, [])
+                            if anomalies[k].get("type") == anomalies[j].get("type"))
+            text = explain_single(
+                base_url, api_key, model, chunk_lines, idx,
+                to_llm_context([anomalies[j]]),
+                rule_id=anomalies[j].get("type"),
+                # Only enforce the identity check when there is actually a same-type
+                # sibling in this chunk to confuse it with.
+                ident=anomaly_ident(anomalies[j]) if same_type > 1 else None)
+            if text:
+                explanations[j] = text
+            else:
+                print(f"    still unexplained: {anomalies[j].get('type')} "
+                      f"(kept as pending, not as an empty answer)")
 
     # Detector findings are authoritative and added ONCE, not per chunk.
     detector_findings = detector_to_findings(anomalies)
@@ -880,7 +950,12 @@ def write_markdown_report(report: dict, path: str):
         lines.append(f"- **Evidence:** `{f.get('evidence', '')}`")
         if f.get("rationale"):
             lines.append(f"- **Why the rule fired:** {f['rationale']}")
-        action = f.get("recommended_action") or "n/a"
+        # "n/a" read like "nothing to do here". A detector finding without prose is a
+        # finding the model has not been asked about yet — the rule verdict, evidence
+        # and rationale above it are complete and unaffected.
+        action = f.get("recommended_action") or (
+            "_not generated — open this finding in the console to explain it_"
+            if f.get("source") == "detector" else "n/a")
         label = "Analyst explanation" if f.get("source") == "detector" else "Recommended action"
         lines.append(f"- **{label}:** {action}")
         if f.get("source") != "detector":

@@ -20,6 +20,7 @@ Usage:
   python3 console/test_console.py
 """
 
+import inspect
 import json
 import re
 import shutil
@@ -119,11 +120,14 @@ const check = (label, cond, detail) => {
 };
 
 /* Runs the console's real render path against a stubbed DOM.
-   `pre` lets a case set console state (e.g. open the manifest) before boot. */
-function run(consoleData, pre) {
+   `pre` lets a case set console state (e.g. open the manifest) before boot.
+   `post` runs AFTER boot, for state boot itself owns — marks and the bulk selection
+   are hydrated from the run at boot, so setting them beforehand is overwritten. */
+function run(consoleData, pre, post) {
   let html = "";
   const listeners = {};
-  const src = pre ? js.replace("boot();", pre + " boot();") : js;
+  let src = pre ? js.replace("boot();", pre + " boot();") : js;
+  if (post) src = src.replace("boot();", "boot(); " + post + " render();");
   const ctx = {
     document: {
       getElementById: () => ({ set innerHTML(v) { html = v; }, get innerHTML() { return html; } }),
@@ -296,14 +300,45 @@ check("Unreviewed -> 4 rows", rows(F("open")) === 4, rows(F("open")) + "");
 console.log("\n4. selection, marking, bulk:");
 h = run(LIVE, 'state.selId="d1";').html;
 check("detail follows selection", h.includes("45.153.160.2:4444"));
-h = run(LIVE, 'state.marks={d0:"tp"};').html;
+h = run(LIVE, null, 'state.marks={d0:"tp"};').html;
 check("true-positive mark rendered", h.includes("Marked true positive"));
-h = run(LIVE, 'state.marks={d0:"fp"};').html;
+h = run(LIVE, null, 'state.marks={d0:"fp"};').html;
 check("false-positive mark rendered", h.includes("Dismissed false positive"));
-h = run(LIVE, 'state.marks={d0:"tp"}; state.filter="open";').html;
+h = run(LIVE, null, 'state.marks={d0:"tp"}; state.filter="open";').html;
 check("Unreviewed filter excludes a marked finding", rows(h) === 3, rows(h) + "");
-h = run(LIVE, 'state.checked=["d0","d1"];').html;
+h = run(LIVE, null, 'state.checked=["d0","d1"];').html;
 check("bulk bar shows the selection count", h.includes("2 selected"));
+
+console.log("\n4b. marks are persisted, not page-local:");
+// The run carries the marks. This is the whole point: a refresh, a restart, or
+// reopening from history must show the review that was already done.
+const marked = clone(LIVE);
+marked.marks = { d0: "tp", d1: "fp" };
+h = run(marked).html;
+check("marks arrive from the run, with no page state set",
+      h.includes("Marked true positive"));
+check("a run's marks survive into the Unreviewed filter",
+      rows(run(marked, null, 'state.filter="open";').html) === 2,
+      rows(run(marked, null, 'state.filter="open";').html) + "");
+// A run with no marks must CLEAR them, not inherit the last run's.
+{
+  const r = run(marked, null, 'DATA = {live:true, findings:DATA.findings}; adoptMarks();');
+  check("reopening a run with no marks clears the previous run's",
+        !r.html.includes("Marked true positive"));
+}
+{
+  // Marking writes to the server. Without this the mark lives only in the tab.
+  const posts = [];
+  const r = run(LIVE);
+  r.ctx.fetch = (url, opts) => { posts.push([url, JSON.parse(opts.body)]);
+                                 return Promise.resolve({ ok: true, json: () => ({}) }); };
+  vm.runInContext('mark("d0", "tp");', r.ctx);
+  check("marking POSTs to /api/mark", posts.length === 1 && posts[0][0] === "/api/mark",
+        JSON.stringify(posts));
+  check("it sends the finding id and the mark",
+        posts.length === 1 && posts[0][1].id === "d0" && posts[0][1].mark === "tp",
+        JSON.stringify(posts[0] && posts[0][1]));
+}
 
 console.log("\n5. manifest is integrity, never a signature:");
 h = run(LIVE, "state.manifest=true;").html;
@@ -511,6 +546,138 @@ def check_server_routing():
           fields.get("file", (None, None))[0] == "a.log"
           and b"auth failed" in (fields.get("file", (None, b""))[1] or b""))
     check("multipart non-file fields parse", fields.get("compare", (None, b""))[1] == b"1")
+
+    print("\nstylesheet:")
+    css = CONSOLE_HTML.read_text()
+    defined = set(re.findall(r"(--[a-z0-9-]+)\s*:", css))
+    # Only var() calls with no fallback: `var(--x, 0 0 0 1px #000)` is fine undefined.
+    used = set(re.findall(r"var\((--[a-z0-9-]+)\s*\)", css))
+    # An undefined token makes the whole declaration invalid, so the property silently
+    # falls back to its initial value — a var(--space-5) typo zeroed the detail pane's
+    # padding and nothing failed. This is the check that would have caught it.
+    check("every CSS variable used is defined", not (used - defined),
+          "undefined: " + ", ".join(sorted(used - defined)))
+    check("the narrow-window breakpoint is present (panes stack rather than clip)",
+          "@media (max-width:1000px)" in css)
+
+    print("\nrun history — a review must survive a reopen:")
+    with tempfile.TemporaryDirectory(prefix="runs-test-") as runs_tmp:
+        # The live state file sits BESIDE the run directory, as it does in the app —
+        # inside it, list_runs() would count it as a run.
+        runs_dir = Path(runs_tmp) / ".runs"
+        runs_dir.mkdir()
+        orig_runs, orig_state = serve.RUNS_DIR, serve.STATE_FILE
+        orig_current, orig_STATE = serve.CURRENT_RUN_FILE, serve.STATE
+        try:
+            serve.RUNS_DIR = runs_dir
+            serve.STATE_FILE = Path(runs_tmp) / "console_state.json"
+
+            older = {"runId": "run-a", "generatedAt": "2026-08-16T09:00:00Z",
+                     "findings": [{"id": "d0"}]}
+            newer = {"runId": "run-b", "generatedAt": "2026-08-16T18:00:00Z",
+                     "findings": [{"id": "d0"}]}
+            serve.save_run(older)
+            newer_file = serve.save_run(newer)
+
+            check("saved runs are listed newest first",
+                  [r["runId"] for r in serve.list_runs()] == ["run-b", "run-a"],
+                  str([r["runId"] for r in serve.list_runs()]))
+
+            # A mark on the OLDER run rewrites its file. Ordering must not follow that
+            # write, or reviewing an old run would silently promote it to newest.
+            serve.STATE = dict(older)
+            serve.CURRENT_RUN_FILE = sorted(p.name for p in runs_dir.glob("*.json"))[0]
+            serve.STATE["marks"] = {"d0": "tp"}
+            serve.persist_state()
+            check("marking an old run does not reorder history",
+                  [r["runId"] for r in serve.list_runs()] == ["run-b", "run-a"],
+                  str([r["runId"] for r in serve.list_runs()]))
+            check("the mark is written into the saved run, not just the live state",
+                  json.loads((runs_dir / serve.CURRENT_RUN_FILE).read_text())
+                      .get("marks") == {"d0": "tp"})
+            check("reopening that run returns the mark",
+                  serve.load_run(serve.CURRENT_RUN_FILE).get("marks") == {"d0": "tp"})
+            check("the run index reports how many findings were marked",
+                  next(r["marked"] for r in serve.list_runs() if r["runId"] == "run-a") == 1)
+
+            # An explanation generated after a reopen has to land in the same place.
+            serve.STATE = serve.load_run(newer_file)
+            serve.CURRENT_RUN_FILE = newer_file
+            serve.STATE["findings"][0]["explanation"] = "generated on demand"
+            serve.persist_state()
+            check("an on-demand explanation is written back to the reopened run",
+                  json.loads((runs_dir / newer_file).read_text())["findings"][0]
+                      .get("explanation") == "generated on demand")
+
+            # With no run to write to, persisting must not invent one.
+            serve.CURRENT_RUN_FILE = None
+            serve.STATE = {"runId": "unsaved", "findings": [], "marks": {"d0": "fp"}}
+            serve.persist_state()
+            check("a run not yet in history is not conjured into it",
+                  len(list(runs_dir.glob("*.json"))) == 2,
+                  str(sorted(p.name for p in runs_dir.glob("*.json"))))
+        finally:
+            serve.RUNS_DIR, serve.STATE_FILE = orig_runs, orig_state
+            serve.CURRENT_RUN_FILE, serve.STATE = orig_current, orig_STATE
+
+    print("\nexplanation acceptance (shared by the on-demand button and the second pass):")
+    import log_analyzer as la
+
+    def with_reply(explanations, **kw):
+        """Run explain_single against a canned model reply."""
+        real = la.analyze_chunk
+        la.analyze_chunk = lambda *a, **k: {"explanations": explanations}
+        try:
+            return la.explain_single("", "", "", [], 0, "", **kw)
+        finally:
+            la.analyze_chunk = real
+
+    check("takes an explanation whose rule id matches",
+          with_reply([{"rule_id": "auth_bruteforce", "explanation": "brute force from 10.0.0.1"}],
+                     rule_id="auth_bruteforce") == "brute force from 10.0.0.1")
+    check("takes an explanation with no rule id (the context named one finding)",
+          with_reply([{"explanation": "prose"}], rule_id="auth_bruteforce") == "prose")
+    check("refuses an explanation about a different rule",
+          with_reply([{"rule_id": "disk_space_low", "explanation": "disk"}],
+                     rule_id="auth_bruteforce") == "")
+    check("refuses prose that never names the finding's host",
+          with_reply([{"rule_id": "auth_bruteforce", "explanation": "attack from 10.0.0.9"}],
+                     rule_id="auth_bruteforce", ident="10.0.0.1") == "")
+    check("accepts prose that does name it",
+          with_reply([{"rule_id": "auth_bruteforce", "explanation": "attack from 10.0.0.1"}],
+                     rule_id="auth_bruteforce", ident="10.0.0.1") == "attack from 10.0.0.1")
+    check("an empty explanation is not an answer",
+          with_reply([{"rule_id": "auth_bruteforce", "explanation": ""}],
+                     rule_id="auth_bruteforce") == "")
+    check("no explanations at all returns nothing, never a placeholder",
+          with_reply([]) == "")
+
+    print("\nmarks across a re-publish (rules-only, then explained):")
+    prev = {"findings": [{"id": "detector-0", "title": "brute force"},
+                         {"id": "detector-1", "title": "disk low"}],
+            "marks": {"detector-0": "tp", "detector-1": "fp"}}
+    same = {"findings": [{"id": "detector-0", "title": "brute force"},
+                         {"id": "detector-1", "title": "disk low"},
+                         {"id": "llm-2", "title": "something new"}]}
+    check("a mark survives the run being published again",
+          serve.carry_marks(prev, same) == {"detector-0": "tp", "detector-1": "fp"},
+          str(serve.carry_marks(prev, same)))
+    shifted = {"findings": [{"id": "detector-0", "title": "disk low"},
+                            {"id": "detector-1", "title": "brute force"}]}
+    check("a mark is dropped, never moved, when that id is now a different finding",
+          serve.carry_marks(prev, shifted) == {},
+          str(serve.carry_marks(prev, shifted)))
+    gone = {"findings": [{"id": "detector-0", "title": "brute force"}]}
+    check("a mark on a finding that no longer exists is dropped",
+          serve.carry_marks(prev, gone) == {"detector-0": "tp"},
+          str(serve.carry_marks(prev, gone)))
+    check("a different run does not inherit marks", serve.carry_marks(None, same) == {})
+
+    check("/api/mark is routed", "/api/mark" in inspect.getsource(handler.do_POST))
+    check("the mark endpoint validates the value",
+          "must be tp, fp, or null" in inspect.getsource(handler._mark))
+    check("the mark endpoint refuses an unknown finding id",
+          "no such finding" in inspect.getsource(handler._mark))
 
     return 0 if all(results) else 1
 

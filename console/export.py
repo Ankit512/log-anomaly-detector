@@ -57,7 +57,9 @@ def build(state):
 def latest_run():
     if not RUNS_DIR.exists():
         return None
-    files = sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True)
+    # By name, not mtime: run files are rewritten when a reviewer marks a finding, so
+    # mtime no longer means "most recent run". The name carries the run's timestamp.
+    files = sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.name, reverse=True)
     return json.loads(files[0].read_text()) if files else None
 
 
@@ -94,6 +96,9 @@ def main():
     print(f"wrote {out}  ({out.stat().st_size:,} bytes)")
     print(f"  run       : {state.get('runId')}")
     print(f"  findings  : {findings}  ({explained} with explanations baked in)")
+    marked = len(state.get("marks") or {})
+    if marked:
+        print(f"  marks     : {marked} analyst mark(s) carried into the export")
     print(f"  open it   : open {out}")
     return 0
 

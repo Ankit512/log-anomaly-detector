@@ -105,8 +105,12 @@ WORKDIR = None                                   # temp dir for uploads/download
 # Sources
 # ---------------------------------------------------------------------------
 
+CURRENT_RUN_FILE = None          # the history file STATE came from, if any
+
+
 def save_run(state):
     """Persist a completed run so it can be reopened later."""
+    global CURRENT_RUN_FILE
     RUNS_DIR.mkdir(exist_ok=True)
     run_id = state.get("runId") or "run"
     stamp = (state.get("generatedAt") or "").replace(":", "").replace("-", "")[:15]
@@ -115,8 +119,12 @@ def save_run(state):
         path.write_text(json.dumps(state))
     except OSError:
         return None
+    CURRENT_RUN_FILE = path.name
     # Keep the directory bounded; these are whole reports, not log lines.
-    for old in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime)[:-MAX_RUNS]:
+    # Ordered by the timestamp in the name, never mtime: a run is rewritten whenever a
+    # reviewer marks a finding, and mtime ordering would have made reviewing a run
+    # promote it to "newest" — and evict the wrong file here.
+    for old in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.name)[:-MAX_RUNS]:
         old.unlink(missing_ok=True)
     return path.name
 
@@ -126,12 +134,13 @@ def list_runs():
     if not RUNS_DIR.exists():
         return []
     out = []
-    for path in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.stat().st_mtime, reverse=True):
+    for path in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.name, reverse=True):
         try:
             s = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError):
             continue
         out.append({
+            "marked": len(s.get("marks") or {}),
             "file": path.name,
             "runId": s.get("runId", path.stem),
             "label": s.get("sourceLabel", ""),
@@ -148,6 +157,43 @@ def load_run(name):
     if name not in {r["file"] for r in list_runs()}:
         raise ValueError("no such run")
     return json.loads((RUNS_DIR / name).read_text())
+
+
+def carry_marks(previous, state):
+    """Keep marks when the SAME run is published again (rules-only, then explained).
+
+    Finding ids are positional, so a mark made on the rules-only publish would land on
+    a different finding once the model's findings are merged in. A mark is kept only
+    where the id still names a finding with the same title; anything else is dropped.
+    Losing a mark is recoverable — silently moving one to another finding is not.
+    """
+    marks = (previous or {}).get("marks") or {}
+    if not marks:
+        return {}
+    now = {f.get("id"): f.get("title") for f in state.get("findings", [])}
+    before = {f.get("id"): f.get("title") for f in (previous.get("findings") or [])}
+    return {fid: v for fid, v in marks.items()
+            if fid in now and now[fid] == before.get(fid)}
+
+
+def persist_state():
+    """Write STATE to the live state file AND back into its run-history entry.
+
+    Anything a reviewer adds after the analyzer finishes — marks, on-demand
+    explanations — is only in memory until this runs. Writing the live file alone was
+    the old bug: the work survived a refresh but vanished the moment the run was
+    reopened from history, because history still held the version saved at run time.
+    """
+    try:
+        STATE_FILE.write_text(json.dumps(STATE, indent=2))
+    except OSError:
+        pass
+    if not CURRENT_RUN_FILE:
+        return
+    try:
+        (RUNS_DIR / CURRENT_RUN_FILE).write_text(json.dumps(STATE))
+    except OSError:
+        pass
 
 
 def bundled_samples():
@@ -287,8 +333,16 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
 
     def publish(report_json, partial):
         """Make a report the console's current state."""
-        global STATE
+        global STATE, CURRENT_RUN_FILE
+        # A new run is not saved to history until it finishes, and it is emphatically
+        # not the previous run: detach first, or a mark made while explanations are
+        # still arriving would be written into the run before it.
+        CURRENT_RUN_FILE = None
         state = adapter.adapt(report_json, None)
+        # A reviewer can mark a finding while explanations are still arriving; the
+        # rules-only publish and the final one are the same run, so those marks follow.
+        state["marks"] = carry_marks(
+            STATE if STATE.get("logPath") == str(log_path) else None, state)
         state["idle"] = False
         state["partial"] = partial
         state["logPath"] = str(log_path)
@@ -393,9 +447,12 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._open_run()
         elif path == "/api/explain":
             self._explain()
+        elif path == "/api/mark":
+            self._mark()
         elif path == "/api/reset":
-            global STATE
+            global STATE, CURRENT_RUN_FILE
             STATE = {"idle": True}
+            CURRENT_RUN_FILE = None
             self._json(STATE)
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
@@ -458,11 +515,11 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             state = load_run(name)
         except (ValueError, json.JSONDecodeError):
             return self._json({"error": "no such run"}, 404)
+        global CURRENT_RUN_FILE
         STATE = state
-        try:
-            STATE_FILE.write_text(json.dumps(state, indent=2))
-        except OSError:
-            pass
+        # Marks and on-demand explanations made from here on belong to THIS file.
+        CURRENT_RUN_FILE = name
+        persist_state()
         print(f"  reopened run: {state.get('runId')}", flush=True)
         return self._json(state)
 
@@ -502,27 +559,47 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
                "authoritative):\n"
                f"- [{finding.get('sev')}] {finding.get('type')}: {finding.get('title')}")
         try:
-            result = la.analyze_chunk(la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL,
-                                      chunk, idx, ctx)
+            text = la.explain_single(la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL,
+                                     chunk, idx, ctx, rule_id=finding.get("type"))
         except Exception as e:
             return self._json({"error": f"explanation failed: {e}"}, 500)
 
-        text = ""
-        for ex in result.get("explanations", []):
-            if ex.get("explanation") and (not ex.get("rule_id")
-                                          or ex.get("rule_id") == finding.get("type")):
-                text = ex["explanation"]
-                break
         if not text:
             text = "The model returned no explanation for this finding."
         finding["explanation"] = text
         finding["explanationOnDemand"] = True
-        try:
-            STATE_FILE.write_text(json.dumps(STATE, indent=2))
-        except OSError:
-            pass
+        persist_state()
         print(f"  explained on demand: {fid}", flush=True)
         return self._json(finding)
+
+    def _mark(self):
+        """Record an analyst's true-positive / false-positive mark on a finding.
+
+        Marks used to live only in the page, so a refresh — or reopening the run
+        tomorrow — threw the review away. They are the reviewer's own judgement, not
+        the model's or the rules', and nothing else in the report can reconstruct them.
+        """
+        global STATE
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            return self._json({"error": "bad request"}, 400)
+
+        fid, value = payload.get("id"), payload.get("mark")
+        if not any(f.get("id") == fid for f in STATE.get("findings", [])):
+            return self._json({"error": "no such finding"}, 404)
+        if value not in ("tp", "fp", None):
+            return self._json({"error": "mark must be tp, fp, or null"}, 400)
+
+        marks = dict(STATE.get("marks") or {})
+        if value is None:
+            marks.pop(fid, None)
+        else:
+            marks[fid] = value
+        STATE["marks"] = marks
+        persist_state()
+        return self._json({"marks": marks})
 
     def log_message(self, fmt, *args):
         # Format first: log_error() passes (code, message), so indexing args and
@@ -670,7 +747,7 @@ def main():
     ap.add_argument("--no-open", action="store_true", help="Do not open a browser")
     args = ap.parse_args()
 
-    global STATE
+    global STATE, CURRENT_RUN_FILE
     with tempfile.TemporaryDirectory(prefix="anomaly-console-") as tmp:
         WORKDIR = tmp
         try:
@@ -699,12 +776,20 @@ def main():
             print(f"\nERROR: {e}")
             sys.exit(1)
 
+        # A run started from the shell is a run like any other: save it, so it can be
+        # reopened later and so a reviewer's marks have somewhere to be written. Only
+        # browser-started runs used to reach history, which made marks on --input runs
+        # quietly page-local.
+        if not STATE.get("idle"):
+            save_run(STATE)
+
         if STATE.get("idle"):
             # A restart should not throw away a run that took minutes to produce.
             recent = list_runs()
             if recent:
                 try:
                     STATE = load_run(recent[0]["file"])
+                    CURRENT_RUN_FILE = recent[0]["file"]
                     print(f"  restored the last run: {STATE.get('runId')} "
                           f"({len(recent)} saved run(s) available)")
                 except (ValueError, json.JSONDecodeError):

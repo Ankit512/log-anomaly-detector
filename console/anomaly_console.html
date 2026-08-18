@@ -296,6 +296,32 @@ a:hover{color:var(--color-accent-400)}
 .spinner{width:26px;height:26px;border-radius:50%;border:2px solid var(--color-neutral-800);
   border-top-color:var(--color-accent);animation:spin 0.9s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+
+/* — narrow windows —
+   The list pane is a fixed 520px, and the header rows do not wrap, so below roughly
+   1000px the page grew wider than the window: the detail pane was clipped mid-word
+   and the evidence block could only be read by scrolling the whole page sideways.
+   Found by opening the console in a browser at 820px — every headless check passed,
+   because none of them had a viewport. Below the breakpoint the panes stack and the
+   header wraps, so nothing is ever cut off horizontally. */
+@media (max-width:1000px){
+  /* Two independently-scrolling panes need a fixed-height shell. Stacked, they are
+     one document again, so the page scrolls and the footer stays after the content
+     instead of being painted over it. */
+  .app{height:auto;min-height:100vh;overflow:visible}
+  .hdr,.runbar{flex-wrap:wrap;gap:var(--space-3) var(--space-4)}
+  .runacts{margin-left:0}
+  .body{flex-direction:column}
+  .list-pane{width:auto;box-shadow:inset 0 -1px 0 rgba(233,233,237,.10)}
+  .rows,.detail{overflow:visible}
+  .detail-pane{flex:1 0 auto}
+  .detail{padding:var(--space-6) var(--space-6) var(--space-8)}
+  /* The rule id sits between the badges and a right-aligned timestamp; with no room
+     to shrink, that row was the one thing still overflowing the window. */
+  .d-head{flex-wrap:wrap}
+  /* .split already wraps at its 320px min-width, so the paired panels fall into one
+     column on their own once the detail pane is full width. */
+}
 </style>
 </head>
 <body>
@@ -1164,7 +1190,8 @@ function runsPanel() {
         r.runId === DATA.runId ? 1 : 0}">
         <b>${esc(r.runId)}</b>
         <span>${r.unrecognized ? "unrecognized" : `${r.findings} finding(s)`}${
-          r.compareRun ? " · compare" : ""}</span>
+          r.compareRun ? " · compare" : ""}${
+          r.marked ? ` · ${r.marked} marked` : ""}</span>
         <span class="when">${esc((r.generatedAt || "").slice(5, 16).replace("T", " "))}</span>
       </button>`).join("")}
   </div>`;
@@ -1215,8 +1242,23 @@ function toggleCheck(id) {
     : state.checked.concat(id) });
 }
 
+/* Marks are the reviewer's own judgement — the one thing in the run that cannot be
+   regenerated — so they go to the server, which writes them into the saved run. The
+   UI updates first and does not wait: a failed write must not swallow the click. */
 function mark(id, v) {
   setState({ marks: Object.assign({}, state.marks, { [id]: v }) });
+  if (STANDALONE) return;          // exported copy: no server to write to
+  fetch("/api/mark", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, mark: v === undefined ? null : v }),
+  }).catch(() => {});
+}
+
+/* Marks belong to the run, not to the page. Whenever DATA is replaced — boot, a new
+   analysis, or reopening from history — the marks on screen come from that run. */
+function adoptMarks() {
+  state.marks = Object.assign({}, (DATA && DATA.marks) || {});
+  state.checked = [];
 }
 
 function copyEvidence() {
@@ -1289,6 +1331,7 @@ function pollProgress() {
                                     { cache: "no-store" })).json();
     DATA = data;
     state.selId = null;
+    adoptMarks();
     loadRuns().then(render);
     render();
   }, 900);
@@ -1324,6 +1367,7 @@ async function openRun(file) {
     if (data && Array.isArray(data.findings)) {
       DATA = data;
       state.selId = null;
+      adoptMarks();
     }
   } catch { /* keep whatever is on screen */ }
   render();
@@ -1396,9 +1440,10 @@ document.addEventListener("click", (e) => {
       case "tp": { const d = current(); return d && mark(d.id, "tp"); }
       case "fp": { const d = current(); return d && mark(d.id, "fp"); }
       case "bulk-confirm": {
-        const m = Object.assign({}, state.marks);
-        state.checked.forEach((id) => { m[id] = "tp"; });
-        return setState({ marks: m, checked: [] });
+        // Each one goes through mark() so the bulk path persists like the single one.
+        const ids = state.checked.slice();
+        ids.forEach((id) => mark(id, "tp"));
+        return setState({ checked: [] });
       }
       case "bulk-clear": return setState({ checked: [] });
       default: return;           // noop
@@ -1443,6 +1488,7 @@ document.addEventListener("keydown", (e) => {
 function boot() {
   if (window.CONSOLE_DATA) {
     DATA = window.CONSOLE_DATA;
+    adoptMarks();                               // an export carries its marks with it
     render();
     return;
   }
@@ -1461,6 +1507,7 @@ function boot() {
       if (Array.isArray(data.findings)) {
         DATA = data;
         state.selId = null;
+        adoptMarks();                           // a refresh keeps the review so far
         render();
       }
     })
