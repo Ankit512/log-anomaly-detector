@@ -289,7 +289,7 @@ function sidebar() {
     </div>
     <nav class="nav">
       <button class="nav-i on">${icon("overview")}Overview</button>
-      <a class="nav-i" href="/" title="Open the Alerts review console">${icon("alerts")}Alerts</a>
+      <a class="nav-i" href="/alerts" title="Open the Alerts review console">${icon("alerts")}Alerts</a>
       ${soon("Incidents", "incidents")}
       ${soon("Threat Intel", "threat")}
       ${soon("Assets", "assets")}
@@ -493,7 +493,8 @@ function alertsTable() {
       <td>${(a.tactics || []).map((t) => `<span class="tac">${esc(t)}</span>`).join("") || "—"}</td>
       <td>${esc(a.name)}</td>
       <td class="src">${esc(a.source || "—")}</td>
-      <td><a href="/" title="Open in the Alerts console">View</a></td>
+      <td><a href="/alerts?sel=${encodeURIComponent(a.id || "")}"
+             title="Open in the Alerts console, focused on this finding">View</a></td>
     </tr>`).join("")
     : `<tr><td colspan="7" class="chart-empty">No alerts in this window.</td></tr>`;
   return `

@@ -1872,10 +1872,21 @@ document.addEventListener("keydown", (e) => {
      3. the bundled fixture — so the file always opens, even with no run
    The console never fetches anything off this machine; over file:// the fetch
    fails by design and the fixture is used. */
+/* ?sel=<findingId> deep-link: an Overview "Latest Alerts" row opens this
+   console focused on that finding. Applied only when the finding exists;
+   anything else falls back to the default selection. */
+function urlSelId(data) {
+  if (typeof location === "undefined" || !location.search) return null;
+  const sel = new URLSearchParams(location.search).get("sel");
+  return sel && ((data && data.findings) || []).some((f) => f.id === sel) ? sel : null;
+}
+
 function boot() {
   if (window.CONSOLE_DATA) {
     DATA = window.CONSOLE_DATA;
     adoptMarks();                               // an export carries its marks with it
+    const sel = urlSelId(DATA);                 // only override a selection when
+    if (sel) state.selId = sel;                 // the URL actually names one
     render();
     return;
   }
@@ -1893,7 +1904,7 @@ function boot() {
       }
       if (Array.isArray(data.findings)) {
         DATA = data;
-        state.selId = null;
+        state.selId = urlSelId(data);
         adoptMarks();                           // a refresh keeps the review so far
         render();
       }

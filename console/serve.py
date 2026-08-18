@@ -55,8 +55,11 @@ import export  # noqa: E402
 import redact  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
+sys.path.insert(0, str(ROOT / "threat_intel"))
+from tactic_phase_map import phase_for_tactics  # noqa: E402
 
 CONSOLE_HTML = HERE / "anomaly_console.html"
+OVERVIEW_HTML = HERE / "overview.html"
 STATE_FILE = HERE / "console_state.json"        # gitignored; handy for debugging
 
 # Completed runs are written here so the dashboard survives a refresh, a restart, or
@@ -340,6 +343,194 @@ def runs_summary():
                                      key=lambda e: (-e["count"], e["id"])),
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# SOC Overview data (/api/overview + /api/ask)
+# ---------------------------------------------------------------------------
+
+# The Overview's KPI/alert buckets. Findings with other severities (e.g. an
+# LLM note rated INFO) are real but are notes, not alerts — they stay on the
+# Alerts console and are deliberately not counted into these KPIs.
+KPI_BUCKETS = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
+
+
+def _finding_sev_counts(findings):
+    counts = {b: 0 for b in KPI_BUCKETS}
+    for f in findings:
+        sev = str(f.get("sev", "")).upper()
+        if sev in counts:
+            counts[sev] += 1
+    return counts
+
+
+def _prior_run_state():
+    """The saved run immediately OLDER than the current one, for 'vs previous'.
+
+    The current run is usually itself the newest history entry, so entries with
+    generatedAt >= the current stamp are skipped. None when there is no prior —
+    the caller then reports null deltas rather than inventing a comparison.
+    """
+    cur = STATE.get("generatedAt") or ""
+    for r in list_runs():                      # newest first
+        if (r.get("generatedAt") or "") < cur:
+            try:
+                return load_run(r["file"])
+            except (ValueError, OSError, json.JSONDecodeError):
+                continue
+    return None
+
+
+def _delta(cur, prev):
+    """{pct, dir} vs the prior run; None when there is no honest base.
+
+    prev == 0 gives no denominator for a percentage, so that is null too —
+    never a made-up "100%". Equal counts show as 0% down (flat).
+    """
+    if prev is None or prev == 0:
+        return None
+    return {"pct": round(abs(cur - prev) / prev * 100),
+            "dir": "up" if cur > prev else "down"}
+
+
+def overview_state(window=None):
+    """The SOC Overview payload, entirely derived from the current run's state.
+
+    Every number traces to the adapter state (findings, mitreFrequency) or the
+    run history (deltas). Nothing is estimated: no prior run -> null deltas; a
+    finding without a timestamp is absent from the time chart; a finding whose
+    rule maps to no tactic gets a blank attacker status.
+    """
+    if STATE.get("idle"):
+        return {"error": "no run yet — analyze a log first"}
+
+    findings = STATE.get("findings", [])
+    counts = _finding_sev_counts(findings)
+    total = sum(counts.values())
+
+    prior = _prior_run_state()
+    if prior is None:
+        deltas = {k: None for k in ("total", "critical", "high", "medium", "low")}
+    else:
+        p_counts = _finding_sev_counts(prior.get("findings", []))
+        deltas = {"total": _delta(total, sum(p_counts.values()))}
+        for b in KPI_BUCKETS:
+            deltas[b.lower()] = _delta(counts[b], p_counts[b])
+
+    bins = {}
+    for f in findings:
+        sev = str(f.get("sev", "")).upper()
+        stamp = f.get("stamp") or ""
+        if sev not in KPI_BUCKETS or len(stamp) < 13:
+            continue
+        hour = stamp[:13] + ":00:00Z"
+        b = bins.setdefault(hour, {"t": hour, "critical": 0, "high": 0,
+                                   "medium": 0, "low": 0})
+        b[sev.lower()] += 1
+
+    tactic_counts = {}
+    for t in STATE.get("mitreFrequency") or []:
+        tactic_counts[t["tactic"]] = tactic_counts.get(t["tactic"], 0) + t["count"]
+
+    latest = []
+    for f in sorted(findings, key=lambda f: f.get("stamp") or "", reverse=True)[:10]:
+        tactics = []
+        for t in f.get("mitre") or []:
+            if t.get("tactic") and t["tactic"] not in tactics:
+                tactics.append(t["tactic"])
+        latest.append({
+            "id": f.get("id"),
+            "time": (f.get("stamp") or "")[:19].replace("T", " "),
+            "severity": f.get("sev", ""),
+            "attackerStatus": phase_for_tactics(tactics),
+            "tactics": tactics,
+            "name": f.get("title", ""),
+            "source": STATE.get("sourceLabel", ""),
+        })
+
+    files = []
+    if STATE.get("sourceLabel"):
+        files.append({"name": Path(STATE["sourceLabel"]).name,
+                      "ok": not STATE.get("unrecognized")})
+    for s in bundled_samples():
+        name = Path(s["value"]).name
+        if all(f["name"] != name for f in files):
+            files.append({"name": name, "ok": True})
+
+    # The label states what is actually shown — the current run's own window.
+    # A ?window=... preference is echoed nowhere until history-window filtering
+    # exists; pretending "Last 24 Hours" over single-run data would be a lie.
+    label = "Current run" + (f" · {STATE['runWindow']}" if STATE.get("runWindow") else "")
+
+    return {
+        "generatedAt": STATE.get("generatedAt", ""),
+        "timeWindowLabel": label,
+        "kpis": {"total": total, "critical": counts["CRITICAL"],
+                 "high": counts["HIGH"], "medium": counts["MEDIUM"],
+                 "low": counts["LOW"], "deltas": deltas},
+        "severityDonut": [{"bucket": b, "count": counts[b],
+                           "pct": round(counts[b] / total * 100) if total else 0}
+                          for b in KPI_BUCKETS],
+        "alertsOverTime": {"bins": [bins[k] for k in sorted(bins)]},
+        "mitreTactics": [{"tactic": k, "count": v} for k, v in
+                         sorted(tactic_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
+        "latestAlerts": latest,
+        "ingestion": {"acceptedLabel": "CSV, JSON, TXT, RAW, HTML",
+                      "files": files[:8]},
+        "model": (COMPUTE.get("model") or la.LLM_MODEL
+                  if COMPUTE.get("mode") == "remote" else la.LLM_MODEL),
+    }
+
+
+ASK_SYSTEM = (
+    "You are an advisory SOC analyst assistant for a local log-analysis console. "
+    "Answer the reviewer's question using ONLY the findings summary provided. "
+    "Severities and verdicts were assigned by deterministic rules and are final: "
+    "you explain and advise, you never change, suppress, or escalate them. "
+    'If the summary does not hold the answer, say so plainly. '
+    'Reply as JSON: {"answer": "<your answer>"}.'
+)
+
+
+def ask_analyst(question, state=None, compute=None):
+    """One advisory answer about the CURRENT findings. Read-only by design.
+
+    The prompt carries a findings SUMMARY (severity, rule, title, host, time),
+    never the raw log. With remote compute, the summary and the question both
+    pass through console/redact.py — the same outbound choke point as
+    explanations — before leaving. The reply is prose for a human; nothing
+    here writes to STATE, severities, or verdicts.
+    """
+    state = STATE if state is None else state
+    compute = COMPUTE if compute is None else compute
+    question = str(question)[:2000]
+
+    findings = state.get("findings", [])
+    parts = [f"Run {state.get('runId', '?')} — {state.get('runParsed', '')} — "
+             f"{len(findings)} finding(s)."]
+    for f in findings[:40]:
+        parts.append(f"- [{f.get('sev')}] {f.get('type')}: {f.get('title')} "
+                     f"(host {f.get('host')}, at {f.get('time') or 'unknown time'})")
+    if len(findings) > 40:
+        parts.append(f"...and {len(findings) - 40} more finding(s) not listed.")
+
+    if compute.get("mode") == "remote":
+        hosts = {f.get("host") for f in findings if f.get("hostDerived")}
+        parts, _ = redact.redact_lines(parts, hosts=hosts)
+        question = redact.redact_text(question, hosts=hosts)
+        base = compute["baseUrl"]
+        key = compute.get("apiKey") or "unused"
+        model = compute.get("model") or la.LLM_MODEL
+    else:
+        base, key, model = la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL
+
+    user = "Findings summary:\n" + "\n".join(parts) + f"\n\nQuestion: {question}"
+    reply = la.strip_fences(la.chat_completion(base, key, model, ASK_SYSTEM, user))
+    try:                       # chat_completion asks for a JSON object reply
+        answer = json.loads(reply).get("answer")
+    except (json.JSONDecodeError, AttributeError):
+        answer = None
+    return (answer or reply).strip()
 
 
 def carry_marks(previous, state):
@@ -658,8 +849,14 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
-        if path in ("/", "/index.html", "/anomaly_console.html"):
+        # The SOC Overview is the landing page; the dark review console is the
+        # "Alerts" drill-down. /anomaly_console.html keeps old bookmarks alive.
+        if path in ("/", "/index.html", "/overview.html"):
+            self._send(OVERVIEW_HTML.read_bytes(), "text/html; charset=utf-8")
+        elif path in ("/alerts", "/console", "/anomaly_console.html"):
             self._send(CONSOLE_HTML.read_bytes(), "text/html; charset=utf-8")
+        elif path == "/api/overview":
+            self._json(overview_state())
         elif path == "/console_state.json":
             self._json(STATE)
         elif path == "/api/sources":
@@ -704,6 +901,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._mark()
         elif path == "/api/compute":
             self._set_compute()
+        elif path == "/api/ask":
+            self._ask()
         elif path == "/api/reset":
             global STATE, CURRENT_RUN_FILE
             STATE = {"idle": True}
@@ -760,6 +959,27 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         threading.Thread(target=worker, daemon=True).start()
         # 202: accepted, not finished. The client polls /api/progress.
         return self._json({"status": "running"}, 202)
+
+    def _ask(self):
+        """AI Analyst chat: one advisory answer over the current findings."""
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError:
+            return self._json({"error": "bad request"}, 400)
+        question = str(payload.get("question") or "").strip()
+        if not question:
+            return self._json({"error": "ask a question"}, 400)
+        if STATE.get("idle"):
+            return self._json({"error": "no run yet — analyze a log first, "
+                                        "then ask about its findings"}, 409)
+        try:
+            answer = ask_analyst(question)
+        except Exception as e:
+            # An unreachable model is an honest error, never a made-up answer.
+            return self._json({"error": f"the analyst model is not reachable: {e}"}, 502)
+        print(f"  analyst asked: {question[:60]!r}", flush=True)
+        return self._json({"answer": answer})
 
     def _set_compute(self):
         """Switch where explanations compute. Never changes what runs locally."""
