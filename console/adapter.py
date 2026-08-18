@@ -39,6 +39,21 @@ SEV_COLOR = {
 }
 LINE_RANGE_RE = re.compile(r"lines (\d+)-(\d+)")
 
+# DISPLAY GROUPING ONLY — how a plain (non-finding) event's log LEVEL maps to a
+# dashboard bucket, so the full event list can be segmented by criticality.
+# This is presentation, never a verdict: rules own real severity, findings keep
+# their rule-assigned bucket, and nothing here can inflate or suppress either.
+# An unrecognized level goes to UNKNOWN — honesty over guessing, always.
+LEVEL_BUCKET = {
+    "CRIT": "CRITICAL", "CRITICAL": "CRITICAL", "FATAL": "CRITICAL",
+    "ALERT": "CRITICAL", "EMERG": "CRITICAL",
+    "ERROR": "HIGH", "ERR": "HIGH",
+    "WARN": "MEDIUM", "WARNING": "MEDIUM",
+    "INFO": "INFO", "NOTICE": "INFO",
+    "DEBUG": "LOW", "TRACE": "LOW",
+}
+BUCKETS = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN")
+
 # rule_id -> the detector function that owns it, for the "rule predicate" panel.
 RULE_REF = {
     "auth_bruteforce": "anomaly_detector.py · detect_auth_bruteforce()",
@@ -144,6 +159,63 @@ def _threat_chips(finding, threat_report):
     return chips
 
 
+def _events(by_line, findings, report_findings):
+    """EVERY parsed record as a dashboard event, plus counts per bucket.
+
+    Sourced from the same records the evidence pane already hydrates, so each
+    event's `raw` is the verbatim source line and each parsed line appears
+    exactly once — the full log, not just the findings. A line a finding sits
+    on inherits that finding's rule-assigned bucket (first finding wins when
+    several share a line); every other line is grouped by its own log level
+    through LEVEL_BUCKET. Grouping only — severity stays owned by the rules.
+    """
+    finding_line = {}                   # line n -> id of the first finding on it
+    for f_report, f_adapted in zip(report_findings, findings):
+        for n in _line_numbers(f_report):
+            finding_line.setdefault(n, f_adapted["id"])
+    sev_by_id = {f["id"]: f["sev"] for f in findings}
+
+    events = []
+    counts = {b: 0 for b in BUCKETS}
+    for n in sorted(by_line):
+        r = by_line[n]
+        fid = finding_line.get(n)
+        if fid is not None:
+            sev = sev_by_id[fid]
+            bucket = sev if sev in BUCKETS else "UNKNOWN"
+        else:
+            bucket = LEVEL_BUCKET.get(str(r.get("level") or "").upper(), "UNKNOWN")
+        counts[bucket] += 1
+        events.append({
+            "n": n,
+            "ts": r["ts"].isoformat() if r.get("ts") else "",
+            "level": r.get("level") or "",
+            "host": r.get("host") or "",
+            "msg": r.get("msg") or "",
+            "raw": r["raw"],            # verbatim source line — never fabricated
+            "bucket": bucket,
+            "isFinding": fid is not None,
+            "findingId": fid,
+        })
+    return events, counts
+
+
+def _mitre_frequency(findings):
+    """Ranked ATT&CK technique frequency across findings.
+
+    Counts findings per technique (via each finding's rule_mitre_map-derived
+    "mitre" list), descending, ties broken by technique id for determinism.
+    Unmapped rules contribute nothing; no findings -> [].
+    """
+    agg = {}
+    for f in findings:
+        for t in f.get("mitre") or []:
+            entry = agg.setdefault(t["id"], {"id": t["id"], "name": t["name"],
+                                             "tactic": t["tactic"], "count": 0})
+            entry["count"] += 1
+    return sorted(agg.values(), key=lambda e: (-e["count"], e["id"]))
+
+
 def adapt(report, threat_report=None):
     by_line, have_log = _load_records(report.get("source_file", ""))
     compare = report.get("compare")
@@ -206,6 +278,12 @@ def adapt(report, threat_report=None):
     degraded = bool(compare) and compare.get("chunks_usable", 0) < compare.get("chunks_total", 0)
     analyzer_errors = [f for f in report.get("findings", []) if f.get("source") == "analyzer"]
 
+    # The full event list for the dashboard. When the source log is not
+    # readable there is nothing honest to show, so events stays empty rather
+    # than reconstructed; the existing unrecognized/emptyInput flags are
+    # untouched and still drive the honest banner.
+    events, severity_counts = _events(by_line, findings, report.get("findings", []))
+
     source_name = Path(report.get("source_file", "run")).stem
     return {
         "live": True,
@@ -249,6 +327,15 @@ def adapt(report, threat_report=None):
         "modelFindings": len([f for f in report.get("findings", [])
                               if f.get("source") == "llm"]),
         "findings": findings,
+
+        # Dashboard data (additive — nothing above is removed or renamed).
+        # events: every parsed line, verbatim, grouped for display only.
+        # severityCounts: events per bucket; sums to linesParsed when the
+        # source log is readable. mitreFrequency: ranked ATT&CK technique
+        # counts across findings; unmapped rules contribute nothing.
+        "events": events,
+        "severityCounts": severity_counts,
+        "mitreFrequency": _mitre_frequency(findings),
     }
 
 

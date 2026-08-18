@@ -1052,6 +1052,160 @@ def check_remote_compute():
     return 0 if all(results) else 1
 
 
+def check_dashboard_data():
+    """Dashboard data contract: adapter emits EVERY parsed event (not just the
+    findings the human saw), bucket counts that sum to linesParsed, and a
+    ranked MITRE technique frequency. No network, no model — adapter only."""
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import adapter
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\ndashboard data — full event list, severity counts, MITRE frequency:")
+
+    # A 60-line mixed-severity canonical log: 5 ERROR auth failures + 1 INFO
+    # success (the brute-force story), then 14 ERROR, 10 WARN, 20 INFO,
+    # 6 DEBUG, 4 CRIT of plain traffic.
+    lines = []
+    for i in range(5):
+        lines.append(f"2026-08-13T02:16:{44 + i}Z ERROR server-01 "
+                     f"auth failed for user 'admin' from 203.0.113.44")
+    lines.append("2026-08-13T02:16:52Z INFO server-01 "
+                 "auth success for user 'admin' from 203.0.113.44")
+    for i in range(14):
+        lines.append(f"2026-08-13T02:17:{10 + i}Z ERROR server-02 upstream timeout {i}")
+    for i in range(10):
+        lines.append(f"2026-08-13T02:18:{10 + i}Z WARN server-02 retrying request {i}")
+    for i in range(20):
+        lines.append(f"2026-08-13T02:19:{10 + i}Z INFO server-03 heartbeat ok {i}")
+    for i in range(6):
+        lines.append(f"2026-08-13T02:20:{10 + i}Z DEBUG server-03 cache probe {i}")
+    for i in range(4):
+        lines.append(f"2026-08-13T02:21:{10 + i}Z CRIT server-04 service down {i}")
+    assert len(lines) == 60
+
+    with tempfile.TemporaryDirectory(prefix="dash-test-") as tmp:
+        log_path = Path(tmp) / "mixed.log"
+        log_path.write_text("\n".join(lines) + "\n")
+
+        report = {
+            "source_file": str(log_path), "generated_at": "2026-08-18T12:00:00+00:00",
+            "lines_parsed": 60, "lines_unparsed": 0,
+            "findings": [
+                {"source": "detector", "severity": "critical",
+                 "rule_id": "auth_bruteforce_success",
+                 "summary": "Brute-force then SUCCESSFUL login",
+                 "evidence": "5x auth failed for 'admin' from 203.0.113.44 (lines 1-5)",
+                 "entities": {"ip": "203.0.113.44"},
+                 "timeline": [{"t": "02:16:52", "label": "success", "line": 6,
+                               "ts": "2026-08-13T02:16:52+00:00"}]},
+                {"source": "detector", "severity": "high",
+                 "rule_id": "auth_bruteforce",
+                 "summary": "Auth brute-force burst",
+                 "evidence": "", "entities": {"ip": "203.0.113.44"},
+                 "timeline": [{"t": "02:16:44", "label": "first", "line": 1,
+                               "ts": "2026-08-13T02:16:44+00:00"},
+                              {"t": "02:16:45", "label": "burst", "line": 2,
+                               "ts": "2026-08-13T02:16:45+00:00"}]},
+                {"source": "detector", "severity": "medium",
+                 "rule_id": "error_rate_spike",
+                 "summary": "Error burst",
+                 "evidence": "lines 7-20", "entities": {},
+                 "timeline": [{"t": "02:17:10", "label": "spike", "line": 7,
+                               "ts": "2026-08-13T02:17:10+00:00"}]},
+            ],
+        }
+        state = adapter.adapt(report)
+        events = state["events"]
+        counts = state["severityCounts"]
+        by_n = {e["n"]: e for e in events}
+
+        # --- ALL events surfaced, not a couple -----------------------------
+        check("len(events) == linesParsed (all 60 surfaced)",
+              len(events) == state["linesParsed"] == 60, str(len(events)))
+        check("every parsed line appears exactly once, in order",
+              [e["n"] for e in events] == list(range(1, 61)))
+        check("events[].raw is the verbatim source line",
+              all(e["raw"] == lines[e["n"] - 1] for e in events))
+        check("severityCounts sums to linesParsed",
+              sum(counts.values()) == 60, str(counts))
+        check("all six buckets always present",
+              set(counts) == {"CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"})
+
+        # --- finding lines carry their rule-assigned bucket ----------------
+        check("finding line keeps the rule severity bucket",
+              by_n[6]["bucket"] == "CRITICAL" and by_n[6]["isFinding"]
+              and by_n[6]["findingId"] == "detector-0", str(by_n[6]))
+        check("evidence-range endpoints tie back to the finding",
+              by_n[1]["findingId"] == "detector-0" and by_n[1]["bucket"] == "CRITICAL")
+        # Line 1 is claimed by finding 0 (evidence range) AND finding 1
+        # (timeline); the first finding wins. Line 2 is only finding 1's.
+        check("first finding wins a shared line",
+              by_n[1]["findingId"] == "detector-0"
+              and by_n[2]["findingId"] == "detector-1"
+              and by_n[2]["bucket"] == "HIGH")
+        check("error_rate_spike line grouped MEDIUM by its rule",
+              by_n[7]["bucket"] == "MEDIUM" and by_n[7]["findingId"] == "detector-2")
+
+        # --- plain events group by their own level (display only) ----------
+        check("plain ERROR -> HIGH", by_n[10]["bucket"] == "HIGH"
+              and not by_n[10]["isFinding"] and by_n[10]["findingId"] is None)
+        check("plain WARN -> MEDIUM", by_n[25]["bucket"] == "MEDIUM")
+        check("plain INFO -> INFO", by_n[35]["bucket"] == "INFO")
+        check("plain DEBUG -> LOW", by_n[51]["bucket"] == "LOW")
+        check("plain CRIT -> CRITICAL", by_n[58]["bucket"] == "CRITICAL")
+        check("no UNKNOWN in a fully-recognized log", counts["UNKNOWN"] == 0)
+        check("event carries ts/level/host/msg from the parsed record",
+              by_n[1]["ts"].startswith("2026-08-13T02:16:44")
+              and by_n[1]["level"] == "ERROR" and by_n[1]["host"] == "server-01"
+              and by_n[1]["msg"].startswith("auth failed"))
+
+        # --- MITRE frequency ----------------------------------------------
+        freq = state["mitreFrequency"]
+        check("T1110 ranked first with count 2 (both bruteforce rules)",
+              bool(freq) and freq[0]["id"] == "T1110" and freq[0]["count"] == 2,
+              str(freq))
+        check("T1078 present with count 1",
+              any(t["id"] == "T1078" and t["count"] == 1 for t in freq))
+        check("technique entries carry name + tactic",
+              all(t.get("name") and t.get("tactic") for t in freq))
+        check("unmapped rule (error_rate_spike) contributes nothing",
+              len(freq) == 2, str([t["id"] for t in freq]))
+
+        # --- UNKNOWN level -> UNKNOWN bucket (never guessed) ---------------
+        csv_path = Path(tmp) / "log360.csv"
+        csv_path.write_text(
+            "Message,Common Severity,LogType,Process Id,Facility,Severity,Time,Device,Source\n"
+            "Heartbeat received,,Monitoring,,daemon,,2026-08-17 09:40:30,,monitor-02\n"
+            "Backup done,Information,Application,1,daemon,Information,2026-08-17 09:41:00,app-01,syslog\n")
+        state2 = adapter.adapt({"source_file": str(csv_path), "findings": [],
+                                "lines_parsed": 2, "lines_unparsed": 0})
+        unk = [e for e in state2["events"] if e["bucket"] == "UNKNOWN"]
+        check("UNKNOWN level maps to the UNKNOWN bucket only",
+              len(unk) == 1 and unk[0]["level"] == "UNKNOWN"
+              and state2["severityCounts"]["UNKNOWN"] == 1,
+              str(state2["severityCounts"]))
+        check("no findings -> mitreFrequency is an empty list",
+              state2["mitreFrequency"] == [])
+
+        # --- honest empties: unrecognized input emits no events ------------
+        bad_path = Path(tmp) / "garbage.txt"
+        bad_path.write_text("### not a log ###\n::: still not :::\n")
+        state3 = adapter.adapt({"source_file": str(bad_path), "findings": [],
+                                "lines_parsed": 0, "lines_unparsed": 2})
+        check("unrecognized input: events empty, banner flags untouched",
+              state3["events"] == [] and state3["unrecognized"]
+              and sum(state3["severityCounts"].values()) == 0)
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -1090,10 +1244,11 @@ def main():
     routing = check_server_routing()
     log360 = check_log360()
     remote = check_remote_compute()
-    if result.returncode or routing or log360 or remote:
+    dashboard = check_dashboard_data()
+    if result.returncode or routing or log360 or remote or dashboard:
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing + log360 + remote-compute checks green")
+    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data checks green")
     return 0
 
 
