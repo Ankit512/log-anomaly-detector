@@ -638,9 +638,13 @@ function renderPicker() {
       <div class="src-k">Your machine</div>
       <div class="src-t">Analyze a local file</div>
       <div class="src-note">Read locally — your log never leaves this machine. It is copied to a
-        temporary file, analyzed, and discarded when the console stops.</div>
+        temporary file, analyzed, and discarded when the console stops.
+        Takes .log, .txt, .out, .syslog, .messages, .err, rotated .log.1 / .log.2, and
+        extension-less syslog / messages / auth files; anything else is accepted if it
+        reads as plain text.</div>
       <div class="src-row">
-        <input type="file" id="fileInput" class="input" style="width:auto;min-width:280px">
+        <input type="file" id="fileInput" class="input" style="width:auto;min-width:280px"
+               accept=".log,.txt,.out,.syslog,.messages,.err,.1,.2">
         <button class="btn btn-primary" data-act="upload">Analyze file</button>
       </div>
     </div>
