@@ -1588,6 +1588,254 @@ def check_allruns():
     return 0 if all(results) else 1
 
 
+def check_soc_overview():
+    """SOC Overview backend: /api/overview matches Jim's contract exactly and
+    every number traces to the run state; /api/ask is advisory-only with the
+    LLM stubbed (and redacted when remote); routing puts the Overview at /
+    and keeps the console at /alerts with a working ?sel deep-link."""
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    sys.path.insert(0, str(ROOT / "threat_intel"))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import adapter
+    import serve
+    import log_analyzer as la
+    from tactic_phase_map import phase_for_tactics
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nSOC overview — /api/overview, /api/ask, attacker status, routing:")
+
+    # --- the tactic -> phase mapping (display grouping, never a verdict) ----
+    check("Reconnaissance -> 'Planning / Probing'",
+          phase_for_tactics(["Reconnaissance"]) == "Planning / Probing")
+    check("Initial Access -> 'Breaking In'",
+          phase_for_tactics(["Initial Access"]) == "Breaking In")
+    check("deepest phase wins across tactics",
+          phase_for_tactics(["Initial Access", "Credential Access"]) == "Spreading Inside")
+    check("unmapped tactics -> blank, never guessed",
+          phase_for_tactics([]) == "" and phase_for_tactics(["Not A Tactic"]) == "")
+
+    real = (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE,
+            serve.CURRENT_RUN_FILE, la.chat_completion)
+    try:
+        with tempfile.TemporaryDirectory(prefix="soc-test-") as tmp:
+            tmp = Path(tmp)
+            serve.RUNS_DIR = tmp / ".runs"
+            serve.STATE_FILE = tmp / "console_state.json"
+            serve.set_compute({"mode": "local"})
+
+            def make_state(stem, hour, findings):
+                log = tmp / f"{stem}.log"
+                log.write_text("\n".join(
+                    f"2026-08-13T02:16:{44 + i:02d}Z ERROR host-1 "
+                    f"auth failed for user 'admin' from 203.0.113.44"
+                    for i in range(6)) + "\n")
+                s = adapter.adapt({"source_file": str(log),
+                                   "generated_at": f"2026-08-18T{hour:02d}:00:00+00:00",
+                                   "lines_parsed": 6, "lines_unparsed": 0,
+                                   "findings": findings})
+                s["idle"] = False
+                s["sourceLabel"] = f"{stem}.log"
+                return s
+
+            def finding(rule, sev, minute, line):
+                return {"source": "detector", "severity": sev, "rule_id": rule,
+                        "summary": f"{rule} for 'admin' from 203.0.113.44",
+                        "evidence": "", "entities": {"ip": "203.0.113.44"},
+                        "timeline": [{"t": f"02:{minute}:00", "label": "x", "line": line,
+                                      "ts": f"2026-08-13T02:{minute}:00+00:00"}]}
+
+            current = make_state("attack", 12, [
+                finding("auth_bruteforce_success", "critical", 18, 6),
+                finding("auth_bruteforce", "high", 17, 2),
+                finding("error_rate_spike", "medium", 16, 1),
+            ])
+            serve.STATE = current
+
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path, raw=False):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
+                    body = r.read()
+                    return body.decode(errors="replace") if raw else json.loads(body)
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            try:
+                # --- /api/overview: contract keys and derived values --------
+                ov = get("/api/overview")
+                check("contract keys exactly as dispatched",
+                      set(ov) == {"generatedAt", "timeWindowLabel", "kpis",
+                                  "severityDonut", "alertsOverTime", "mitreTactics",
+                                  "latestAlerts", "ingestion", "model"},
+                      str(sorted(ov)))
+                k = ov["kpis"]
+                check("kpis count findings by rule severity",
+                      (k["total"], k["critical"], k["high"], k["medium"], k["low"])
+                      == (3, 1, 1, 1, 0))
+                check("no prior run -> every delta is null (never faked)",
+                      all(v is None for v in k["deltas"].values()))
+                donut = {d["bucket"]: d for d in ov["severityDonut"]}
+                check("donut carries all four buckets with honest pcts",
+                      len(ov["severityDonut"]) == 4
+                      and donut["CRITICAL"]["pct"] == 33 and donut["LOW"]["count"] == 0)
+                bins = ov["alertsOverTime"]["bins"]
+                check("alerts binned hourly from finding timestamps",
+                      len(bins) == 1 and bins[0]["t"] == "2026-08-13T02:00:00Z"
+                      and (bins[0]["critical"], bins[0]["high"], bins[0]["medium"])
+                      == (1, 1, 1), str(bins))
+                check("mitreTactics rolled up from technique tactics, ranked",
+                      ov["mitreTactics"] == [{"tactic": "Credential Access", "count": 2},
+                                             {"tactic": "Initial Access", "count": 1}],
+                      str(ov["mitreTactics"]))
+                latest = ov["latestAlerts"]
+                check("latestAlerts newest first with id/name/source",
+                      [a["id"] for a in latest] == ["detector-0", "detector-1", "detector-2"]
+                      and latest[0]["source"] == "attack.log"
+                      and latest[0]["time"] == "2026-08-13 02:18:00")
+                check("attackerStatus derived from the finding's tactics",
+                      latest[0]["attackerStatus"] == "Spreading Inside"
+                      and latest[0]["tactics"] == ["Credential Access", "Initial Access"])
+                check("unmapped rule -> blank attackerStatus and no tactics",
+                      latest[2]["attackerStatus"] == "" and latest[2]["tactics"] == [])
+                check("ingestion label + current source flagged ok",
+                      ov["ingestion"]["acceptedLabel"] == "CSV, JSON, TXT, RAW, HTML"
+                      and ov["ingestion"]["files"][0] == {"name": "attack.log", "ok": True})
+                check("model is the effective LLM model", ov["model"] == la.LLM_MODEL)
+
+                # --- deltas appear once a prior run exists ------------------
+                prior = make_state("earlier", 10, [
+                    finding("auth_bruteforce", "high", 10, 2),
+                    finding("error_rate_spike", "medium", 11, 1),
+                ])
+                serve.save_run(prior)
+                serve.save_run(current)     # the current run is also in history
+                d = get("/api/overview")["kpis"]["deltas"]
+                check("delta vs the PRIOR run (not itself): total 3 vs 2 = 50% up",
+                      d["total"] == {"pct": 50, "dir": "up"}, str(d))
+                check("prior count 0 -> delta null (no honest percentage base)",
+                      d["critical"] is None and d["low"] is None)
+                check("equal counts -> 0% (flat)",
+                      d["high"] == {"pct": 0, "dir": "down"}
+                      and d["medium"] == {"pct": 0, "dir": "down"})
+
+                # --- /api/ask: advisory only, stubbed LLM, redacted remote --
+                captured = []
+
+                def fake_chat(base_url, api_key, model, system, user, timeout=300):
+                    captured.append({"base": base_url, "system": system, "user": user})
+                    return json.dumps({"answer": "advisory answer"})
+
+                la.chat_completion = fake_chat
+                before = json.dumps(serve.STATE, sort_keys=True, default=str)
+                status, out = post("/api/ask", {"question": "what happened?"})
+                check("/api/ask answers via the LLM path",
+                      status == 200 and out == {"answer": "advisory answer"}, str(out))
+                check("prompt carries the findings summary, not the raw log",
+                      "auth_bruteforce_success" in captured[-1]["user"]
+                      and "what happened?" in captured[-1]["user"]
+                      and "auth failed for user" not in captured[-1]["user"])
+                check("the system prompt forbids changing verdicts",
+                      "never change" in captured[-1]["system"])
+                check("/api/ask never mutates state or severities",
+                      json.dumps(serve.STATE, sort_keys=True, default=str) == before)
+
+                serve.set_compute({"mode": "remote",
+                                   "baseUrl": "https://gpu-node.internal/v1",
+                                   "apiKey": "k", "model": "m"})
+                status, out = post("/api/ask", {"question": "who attacked host-1?"})
+                check("remote ask goes to the remote node",
+                      status == 200 and captured[-1]["base"] == "https://gpu-node.internal/v1")
+                check("remote ask is redacted (IP, host masked; question too)",
+                      "203.0.113.44" not in captured[-1]["user"]
+                      and "host-1" not in captured[-1]["user"]
+                      and "[IP-1]" in captured[-1]["user"])
+                serve.set_compute({"mode": "local"})
+
+                def broken_chat(*a, **kw):
+                    raise OSError("connection refused")
+
+                la.chat_completion = broken_chat
+                status, out = post("/api/ask", {"question": "hello?"})
+                check("unreachable model -> honest error, never a fabricated answer",
+                      status == 502 and "not reachable" in out.get("error", ""), str(out))
+
+                # --- routing: Overview lands at /, console at /alerts -------
+                check("/ serves the SOC Overview",
+                      "security operations" in get("/", raw=True))
+                check("/alerts and /console serve the review console",
+                      "local log anomaly review" in get("/alerts", raw=True)
+                      and "local log anomaly review" in get("/console", raw=True))
+                check("Overview links point at /alerts with ?sel deep-link",
+                      'href="/alerts"' in get("/", raw=True)
+                      and "/alerts?sel=" in get("/", raw=True))
+
+                # --- ask/overview honest when no run yet --------------------
+                serve.STATE = {"idle": True}
+                check("idle overview -> honest error shape (UI shows its banner)",
+                      "error" in get("/api/overview"))
+                status, out = post("/api/ask", {"question": "hi"})
+                check("idle ask -> 409 with guidance", status == 409)
+            finally:
+                srv.shutdown()
+
+            # --- ?sel deep-link focuses the finding in the console ----------
+            node = shutil.which("node")
+            js_path = tmp / "console.js"
+            js_path.write_text(extract_js(CONSOLE_HTML))
+            data_path = tmp / "data.json"
+            data_path.write_text(json.dumps(LIVE_STATE))
+            sel_js = tmp / "sel.js"
+            sel_js.write_text("""
+const fs = require("fs"), vm = require("vm");
+const js = fs.readFileSync(process.argv[2], "utf8");
+const data = JSON.parse(fs.readFileSync(process.argv[3], "utf8"));
+function run(search) {
+  let html = "";
+  const ctx = { document: { getElementById: () => ({ set innerHTML(v){html=v;},
+                  get innerHTML(){return html;} }), addEventListener: () => {},
+                  activeElement: { tagName: "BODY" } },
+                window: { CONSOLE_DATA: data }, navigator: {},
+                fetch: () => Promise.reject(new Error("x")), console,
+                location: { search }, URLSearchParams };
+  vm.createContext(ctx); vm.runInContext(js, ctx);
+  return vm.runInContext("state.selId", ctx);
+}
+console.log("SEL=" + run("?sel=d2"));
+console.log("BAD=" + run("?sel=nope"));
+""")
+            out = subprocess.run([node, str(sel_js), str(js_path), str(data_path)],
+                                 capture_output=True, text=True).stdout
+            check("?sel=<id> focuses that finding at boot", "SEL=d2" in out, out)
+            check("unknown ?sel falls back to the default selection",
+                  "BAD=null" in out, out)
+    finally:
+        (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE,
+         serve.CURRENT_RUN_FILE, la.chat_completion) = real
+        serve.set_compute({"mode": "local"})
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -1629,11 +1877,13 @@ def main():
     dashboard = check_dashboard_data()
     layout = check_layout_css()
     allruns = check_allruns()
-    if result.returncode or routing or log360 or remote or dashboard or layout or allruns:
+    soc = check_soc_overview()
+    if (result.returncode or routing or log360 or remote or dashboard or layout
+            or allruns or soc):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data "
-          "+ layout + all-runs checks green")
+          "+ layout + all-runs + soc-overview checks green")
     return 0
 
 
