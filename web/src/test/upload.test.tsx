@@ -43,6 +43,34 @@ describe("header upload -> /api/analyze -> /api/progress", () => {
       undefined, { timeout: 5000 })).toBeInTheDocument();
   }, 10000);
 
+  it("shows a REAL progress strip (stage + bar) from /api/progress, then done", async () => {
+    // The poll answer advances across calls: running@2/5 -> running@5/5 -> done.
+    let n = 0;
+    const steps = [
+      { status: "running", phase: "explaining", done: 2, total: 5, findings: 2 },
+      { status: "running", phase: "explaining", done: 5, total: 5, findings: 5 },
+      { status: "done", phase: "done", findings: 5 },
+    ];
+    mockFetch({
+      "/api/overview": OVERVIEW,
+      "/api/metrics": METRICS,
+      "/api/analyze": { status: "running" },
+      "/api/progress": () => steps[Math.min(n++, steps.length - 1)],
+    });
+    renderApp(<App />);
+    await screen.findByText("Total Alerts");
+
+    await userEvent.upload(screen.getByTestId("ingest-file"), file);
+
+    // A real progressbar with the backend's own done/total, never a fake bar.
+    const bar = await screen.findByRole("progressbar", undefined, { timeout: 5000 });
+    expect(bar).toHaveAttribute("aria-valuenow", "40");
+    expect(screen.getByText("explaining…")).toBeInTheDocument();
+
+    expect(await screen.findByText(/server\.csv analyzed — 5 finding\(s\)/, undefined,
+      { timeout: 5000 })).toBeInTheDocument();
+  }, 10000);
+
   it("shows the server's rejection when the file is not accepted", async () => {
     mockFetch({
       "/api/overview": OVERVIEW,

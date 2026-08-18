@@ -16,18 +16,22 @@ export function renderApp(ui: ReactElement, { route = "/" } = {}) {
   );
 }
 
-/** Route fetch by substring match; anything unrouted 404s. A route value with
- *  `__status` responds with that HTTP status (non-2xx => ok: false). */
+/** Route fetch by substring match; anything unrouted 404s. Routes are tried
+ *  in insertion order, so list more specific paths first ("/api/runs-summary"
+ *  before "/api/runs"). A route value with `__status` responds with that HTTP
+ *  status (non-2xx => ok: false); a function value is called per request, so
+ *  a route can change its answer across polls. */
 export function mockFetch(routes: Record<string, unknown>) {
   vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url);
     for (const [k, v] of Object.entries(routes)) {
       if (u.includes(k)) {
-        const { __status, ...body } = (v ?? {}) as Record<string, unknown>;
+        const value = typeof v === "function" ? (v as () => unknown)() : v;
+        const { __status, ...body } = (value ?? {}) as Record<string, unknown>;
         const status = typeof __status === "number" ? __status : 200;
         return {
           ok: status >= 200 && status < 300, status,
-          json: async () => (typeof __status === "number" ? body : v),
+          json: async () => (typeof __status === "number" ? body : value),
         } as Response;
       }
     }
