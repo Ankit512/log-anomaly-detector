@@ -292,7 +292,8 @@ console.log("\n0d. standalone export mode (no server exists behind it):");
   };
 
   const h = withFlag();
-  check("renders the run without any fetch", (h.match(/class="row"/g) || []).length === 4);
+  // Banded default: CRITICAL+HIGH open -> 3 of the 4 finding cards visible.
+  check("renders the run without any fetch", (h.match(/class="row"/g) || []).length === 3);
   check("static-export banner shown", h.includes("Static export"));
   check("banner says it opens anywhere", h.includes("open anywhere, no install"));
   check("banner states no network calls", h.includes("no network calls"));
@@ -322,7 +323,13 @@ console.log("\n2. live data — the run reads from the report, not the fixture:"
 h = run(LIVE).html;
 check("live run id rendered", h.includes("bench-2026-08-15"));
 check("run-state switcher HIDDEN (state is derived, not chosen)", !h.includes('name="runview"'));
-check("all 4 findings render", rows(h) === 4, rows(h) + " rows");
+// The banded default view opens CRITICAL and HIGH only, so 3 of the 4 finding
+// cards render; the LOW finding appears once its band is expanded.
+check("default view renders the CRITICAL/HIGH findings", rows(h) === 3, rows(h) + " rows");
+const OPEN_ALL = 'state.bands={CRITICAL:true,HIGH:true,MEDIUM:true,LOW:true,INFO:true,UNKNOWN:true};';
+check("all 4 findings render with every band expanded",
+      rows(run(LIVE, null, OPEN_ALL).html) === 4,
+      rows(run(LIVE, null, OPEN_ALL).html) + " rows");
 check("rule severity shown", h.includes("CRITICAL"));
 check("under-rated delta shown", h.includes("under-rated by LLM"));
 check("derived host shown", h.includes("server-01"));
@@ -331,8 +338,12 @@ check("evidence highlight applied", h.includes("ev-hit"));
 check("predicate rendered", h.includes("failures_from(ip)"));
 check("timeline rendered", h.includes("First failed login"));
 check("under-rated pill matches the data", h.includes("<b>2</b>"));
-check("LLM-surfaced row credits the model, no blank dash",
-      h.includes("model surfaced this") && h.includes("no rule fired"));
+// The LLM-surfaced finding lives in the LOW band, so its row needs the band open.
+{
+  const oh = run(LIVE, null, OPEN_ALL).html;
+  check("LLM-surfaced row credits the model, no blank dash",
+        oh.includes("model surfaced this") && oh.includes("no rule fired"));
+}
 // NOTE: `occurrences` is carried in the state but the console does not render it
 // today, so a finding the dedupe collapsed reads as one event. Not asserted here
 // because the test must describe the console as it is, not as it should be.
@@ -364,15 +375,132 @@ check("unmapped findings show NO tag (3 tags, all on mapped findings)",
   const legacy = clone(LIVE);
   legacy.findings.forEach((f) => delete f.mitre);
   const lh = run(legacy).html;
-  check("legacy state without mitre keys still renders", rows(lh) === 4, rows(lh) + " rows");
+  check("legacy state without mitre keys still renders", rows(lh) === 3, rows(lh) + " rows");
   check("legacy state shows no tags", !lh.includes("tag-mitre"));
+}
+
+console.log("\n2c. criticality bands — the clean segmented default:");
+h = run(LIVE).html;
+{
+  const order = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"]
+    .map((b) => h.indexOf(`data-bucket="${b}"`));
+  check("all six bands render in criticality order",
+        order.every((i) => i >= 0) && order.every((i, k) => k === 0 || i > order[k - 1]),
+        order.join(","));
+  check("band headers carry finding + event counts",
+        h.includes("2 finding(s) · 2 event(s)")        // CRITICAL
+        && h.includes("0 finding(s) · 12 event(s)"));  // INFO
+  const expanded = (b) => new RegExp(
+    `data-band="${b}"[^>]*aria-expanded="true"`).test(h);
+  check("CRITICAL and HIGH start expanded", expanded("CRITICAL") && expanded("HIGH"));
+  check("MEDIUM/LOW/INFO/UNKNOWN start collapsed",
+        ["MEDIUM", "LOW", "INFO", "UNKNOWN"].every((b) => !expanded(b)));
+  check("a finding keeps its full card inside its band",
+        /data-bucket="CRITICAL"[\s\S]*?class="row"[\s\S]*?RULE-CAUGHT/.test(h));
+  check("plain events render compactly, distinct from finding cards",
+        h.includes('class="evt-line"') && h.includes("TLS handshake failure"));
+  check("finding lines are not repeated as plain events",
+        !h.includes(">db connection pool exhausted</span>") || rows(h) === 3);
+  check("a collapsed band's events are not in the DOM", !h.includes("healthcheck ok #7"));
+  check("no severity badge on a plain event (grouping is not a verdict)",
+        !/evt-line[^>]*>[\s\S]{0,200}sev-label/.test(h));
+}
+{
+  const opened = run(LIVE, null, OPEN_ALL).html;
+  check("expanding INFO reveals its compact events", opened.includes("healthcheck ok #7"));
+  check("UNKNOWN band holds the unparseable-level line",
+        /data-bucket="UNKNOWN"[\s\S]*?corrupted trailer/.test(opened));
+}
+
+console.log("\n2d. event dropdowns — detail waits until asked for:");
+{
+  const closed = run(LIVE).html;
+  // Event n6 sits in the open HIGH band: its compact line shows the msg, but the
+  // full raw line exists only inside its dropdown.
+  check("raw line absent while the dropdown is closed",
+        !closed.includes("2026-08-13T02:17:10Z ERROR server-02 TLS handshake failure"));
+  const open = run(LIVE, null, "state.openEvents=[6];").html;
+  check("dropdown shows the raw line VERBATIM",
+        open.includes("2026-08-13T02:17:10Z ERROR server-02 TLS handshake failure from 198.51.100.9"));
+  check("dropdown carries line/ts/level/host fields",
+        open.includes("<k>level</k>") && open.includes("<k>host</k>")
+        && open.includes("<k>ts</k>"));
+}
+
+console.log("\n2e. overview — Top ATT&CK ranking and the three charts:");
+{
+  check("Top-ATT&CK panel present", h.includes('id="atk-panel"'));
+  check("panel renders the compact ranked line",
+        h.includes("T1110 · Brute Force · Credential Access — 4"));
+  const iT1110 = h.indexOf('data-atk="T1110"'), iT1571 = h.indexOf('data-atk="T1571"'),
+        iT1078 = h.indexOf('data-atk="T1078"');
+  check("techniques ranked by frequency, descending",
+        iT1110 >= 0 && iT1110 < iT1571 && iT1571 < iT1078,
+        [iT1110, iT1571, iT1078].join(","));
+  check("ATT&CK chart: one SVG bar per technique",
+        (h.match(/class="chart-atk"/g) || []).length === 3);
+  check("ATT&CK bars reflect the counts (100/50/25%)",
+        h.includes('width="100.0"') && h.includes('width="50.0"') && h.includes('width="25.0"'));
+
+  check("severity chart: one SVG bar per bucket",
+        (h.match(/class="chart-sev"/g) || []).length === 6);
+  // counts 2/12 and 12/12 of the max bucket (INFO=12).
+  check("severity bars reflect the counts",
+        h.includes('width="16.7"') && h.includes("<b>12</b>"));
+  check("severity chart names its total", h.includes("19 parsed events"));
+
+  check("timeline chart SVG present", h.includes('class="chart-timeline"'));
+  check("timeline is honest about unplaceable events",
+        h.includes("1 event(s) have no"));
+  check("charts declare themselves display-only",
+        h.includes("severities come from the rules"));
+  check("charts can be tucked away", h.includes('data-act="overview"'));
+  const hidden = run(LIVE, null, "state.overview=false;").html;
+  check("hidden overview leaves no charts, only the toggle",
+        !hidden.includes("chart-sev") && hidden.includes("show charts"));
+
+  // No techniques -> NO panel, never an invented ranking.
+  const noAtk = clone(LIVE);
+  noAtk.mitreFrequency = [];
+  check("empty mitreFrequency renders no ATT&CK panel",
+        !run(noAtk).html.includes('id="atk-panel"'));
+}
+
+console.log("\n2f. honest states keep their banners and get NO charts:");
+{
+  const unrec = clone(LIVE);
+  unrec.findings = []; unrec.linesParsed = 0; unrec.linesUnparsed = 100;
+  unrec.unrecognized = true; unrec.emptyInput = false;
+  const uh = run(unrec).html;
+  check("unrecognized run keeps the honest banner", uh.includes("Log format not recognized"));
+  check("unrecognized run renders no charts",
+        !uh.includes("chart-sev") && !uh.includes("chart-timeline")
+        && !uh.includes('id="atk-panel"'));
+  check("unrecognized run renders no bands", !uh.includes('data-bucket='));
+
+  const emptyIn = clone(LIVE);
+  emptyIn.findings = []; emptyIn.linesParsed = 0; emptyIn.linesUnparsed = 0;
+  emptyIn.unrecognized = false; emptyIn.emptyInput = true; emptyIn.events = [];
+  const eh = run(emptyIn).html;
+  check("empty input keeps its banner, no charts",
+        eh.includes("the input is empty") && !eh.includes("chart-sev"));
+
+  // A run saved before this feature has none of the new keys: flat list, no bands.
+  const legacy = clone(LIVE);
+  delete legacy.events; delete legacy.severityCounts; delete legacy.mitreFrequency;
+  const lh = run(legacy).html;
+  check("legacy run falls back to the flat finding list", rows(lh) === 4, rows(lh) + " rows");
+  check("legacy run shows no bands and no charts",
+        !lh.includes('data-bucket=') && !lh.includes("chart-sev"));
 }
 
 console.log("\n3. filters:");
 const F = (name) => run(LIVE, `state.filter=${JSON.stringify(name)};`).html;
-check("All -> 4 rows", rows(F("all")) === 4, rows(F("all")) + "");
+// "All" keeps the clean band defaults (LOW stays collapsed); any other filter is
+// an explicit "show me these", so a band holding a match auto-expands.
+check("All -> 3 rows (band defaults)", rows(F("all")) === 3, rows(F("all")) + "");
 check("Rule != LLM -> 2 rows", rows(F("dis")) === 2, rows(F("dis")) + "");
-check("LLM-surfaced -> 1 row", rows(F("llm")) === 1, rows(F("llm")) + "");
+check("LLM-surfaced -> 1 row (its band auto-expands)", rows(F("llm")) === 1, rows(F("llm")) + "");
 check("Unreviewed -> 4 rows", rows(F("open")) === 4, rows(F("open")) + "");
 
 console.log("\n4. selection, marking, bulk:");
