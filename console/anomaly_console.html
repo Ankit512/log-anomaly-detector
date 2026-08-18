@@ -102,7 +102,10 @@ a:hover{color:var(--color-accent-400)}
 /* ==========================================================================
    Console layout
    ========================================================================== */
-.app{height:100vh;min-height:820px;display:flex;flex-direction:column;overflow:hidden}
+/* overflow:auto, not hidden: when the viewport is shorter than the 820px floor
+   (small laptop, zoom, half-height window) the shell must degrade to a scroll.
+   hidden clipped the bottom of the run — list and footer — with no way in. */
+.app{height:100vh;min-height:820px;display:flex;flex-direction:column;overflow:auto}
 
 .hdr{display:flex;align-items:center;gap:var(--space-6);padding:var(--space-4) var(--space-6);flex:none}
 .brand{display:flex;align-items:baseline;gap:var(--space-3);margin-right:auto}
@@ -145,7 +148,10 @@ a:hover{color:var(--color-accent-400)}
 .warn-t{font-size:13px;font-weight:500;margin-bottom:var(--space-1)}
 .warn-b{font-size:12px;color:var(--color-neutral-400);max-width:760px}
 
-.body{flex:1;display:flex;min-height:0}
+/* The review area keeps a working floor: the overview strip and banners can
+   never squeeze the finding list into an unusable sliver. If the viewport
+   cannot afford the floor, .app scrolls (see above) instead of clipping. */
+.body{flex:1;display:flex;min-height:420px}
 
 /* — left: finding list — */
 .list-pane{width:520px;flex:none;display:flex;flex-direction:column;min-height:0;box-shadow:inset -1px 0 0 rgba(233,233,237,.10)}
@@ -155,7 +161,15 @@ a:hover{color:var(--color-accent-400)}
 .bulk{display:flex;align-items:center;gap:var(--space-3);margin:0 var(--space-6) var(--space-3);padding:7px var(--space-4);border-radius:var(--radius-md);background:var(--color-accent-900);flex:none}
 .bulk span{font-size:12px}
 .bulk div{display:flex;gap:var(--space-2);margin-left:auto}
-.rows{flex:1;overflow:auto;padding:0 var(--space-6) var(--space-6);display:flex;flex-direction:column;gap:var(--space-3)}
+.rows{flex:1;overflow:auto;padding:0 var(--space-6) var(--space-6);display:flex;flex-direction:column;gap:var(--space-3);scrollbar-width:thin;scrollbar-gutter:stable}
+/* A long band scrolls INSIDE the list, and that must be discoverable: macOS
+   overlay scrollbars are invisible until touched, which reads as "cropped".
+   Keep a thin, always-styled thumb on every internal scroller. */
+.rows::-webkit-scrollbar,.detail::-webkit-scrollbar,.ovw-grid>.panel::-webkit-scrollbar{width:9px}
+.rows::-webkit-scrollbar-thumb,.detail::-webkit-scrollbar-thumb,
+.ovw-grid>.panel::-webkit-scrollbar-thumb{background:var(--color-neutral-700);border-radius:5px}
+.rows::-webkit-scrollbar-track,.detail::-webkit-scrollbar-track,
+.ovw-grid>.panel::-webkit-scrollbar-track{background:transparent}
 
 .row{display:flex;gap:var(--space-4);padding:var(--space-4);border-radius:var(--radius-md);cursor:pointer}
 .row-rail{display:flex;flex-direction:column;align-items:center;gap:var(--space-3);flex:none;padding-top:2px}
@@ -191,7 +205,9 @@ a:hover{color:var(--color-accent-400)}
   cursor:pointer;font:inherit;font-size:11.5px}
 .ovw-toggle:hover{color:var(--color-accent)}
 .ovw-grid{display:flex;gap:var(--space-4);flex-wrap:wrap}
-.ovw-grid>.panel{flex:1;min-width:260px}
+/* Charts are a summary, never the main event: cap each panel so a wrapped
+   overview cannot starve the finding list below it of height. */
+.ovw-grid>.panel{flex:1;min-width:260px;max-height:230px;overflow:auto;scrollbar-width:thin}
 .chart-rows{display:flex;flex-direction:column;gap:var(--space-2)}
 .chart-row{display:flex;align-items:center;gap:var(--space-3);font-size:11px;font-family:var(--font-mono)}
 .chart-row .lbl{flex:none;width:150px;color:var(--color-neutral-400);overflow:hidden;
