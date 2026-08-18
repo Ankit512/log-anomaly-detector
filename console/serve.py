@@ -153,7 +153,11 @@ def load_run(name):
 def bundled_samples():
     """Logs shipped with the repo, as picker entries. Whitelist for `sample`."""
     out = []
-    for path in [ROOT / "sample-2.log", *sorted((ROOT / "samples").glob("*.log"))]:
+    # *.csv covers Log360 exports; routing stays content-based in normalize.py,
+    # so a CSV that is NOT a Log360 export still hits the honest banner.
+    sample_paths = sorted([*(ROOT / "samples").glob("*.log"),
+                           *(ROOT / "samples").glob("*.csv")])
+    for path in [ROOT / "sample-2.log", *sample_paths]:
         if not path.exists():
             continue
         rel = path.relative_to(ROOT).as_posix()
