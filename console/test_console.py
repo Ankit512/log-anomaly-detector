@@ -62,6 +62,8 @@ LIVE_STATE = {
             "predicate": "failures_from(ip) >= 5\n-> severity = critical",
             "ruleRef": "anomaly_detector.py · detect_auth_bruteforce()",
             "occurrences": 1, "linesNote": None,
+            "mitre": [{"id": "T1110", "name": "Brute Force", "tactic": "Credential Access"},
+                      {"id": "T1078", "name": "Valid Accounts", "tactic": "Initial Access"}],
             "chips": [{"text": "203.0.113.44"}],
             "lines": [{"n": 5, "a": "2026-08-13T02:16:44Z ERROR server-01 auth failed from ",
                        "hit": "203.0.113.44", "b": "", "crit": True}],
@@ -76,7 +78,9 @@ LIVE_STATE = {
             "title": "Outbound connection to 45.153.160.2:4444 (blocked)",
             "ruleWhy": "Port 4444 is a known C2 port.", "explanation": "Investigate server-02.",
             "predicate": "dest_port in SUSPICIOUS_PORTS", "ruleRef": "detect_suspicious_ports()",
-            "occurrences": 1, "linesNote": None, "chips": [],
+            "occurrences": 1, "linesNote": None,
+            "mitre": [{"id": "T1571", "name": "Non-Standard Port", "tactic": "Command and Control"}],
+            "chips": [],
             "lines": [{"n": 18, "a": "blocked outbound ", "hit": "45.153.160.2:4444",
                        "b": "", "crit": False}],
             "timeline": [{"t": "02:19:10", "label": "Connection dropped", "dot": "#d8a35e"}],
@@ -292,6 +296,31 @@ check("LLM-surfaced row credits the model, no blank dash",
 h = run(LIVE, 'state.selId="l0";').html;
 check("linesNote replaces the 'verbatim from the source log' claim",
       h.includes("not a line excerpt") && !h.includes("verbatim from the source log"));
+
+console.log("\n2b. MITRE ATT&CK tags — derived annotation, never invented:");
+h = run(LIVE).html;
+check("mapped finding shows the compact technique tag",
+      h.includes("T1110 · Brute Force · Credential Access"));
+check("multi-technique rule shows every technique",
+      h.includes("T1078 · Valid Accounts · Initial Access"));
+check("C2-port rule shows its own technique",
+      h.includes("T1571 · Non-Standard Port · Command and Control"));
+check("tag is visually distinct from entity chips", h.includes("tag-mitre"));
+check("tag states it does not affect severity",
+      h.includes("does not affect severity"));
+// d2 and l0 carry no mapping: exactly the 3 mapped tags above (2 on d0, 1 on
+// d1), nothing invented for the other two findings.
+check("unmapped findings show NO tag (3 tags, all on mapped findings)",
+      (h.match(/tag-mitre/g) || []).length === 3,
+      (h.match(/tag-mitre/g) || []).length + " tag(s)");
+{
+  // States saved before this feature carry no `mitre` key at all — must render.
+  const legacy = clone(LIVE);
+  legacy.findings.forEach((f) => delete f.mitre);
+  const lh = run(legacy).html;
+  check("legacy state without mitre keys still renders", rows(lh) === 4, rows(lh) + " rows");
+  check("legacy state shows no tags", !lh.includes("tag-mitre"));
+}
 
 console.log("\n3. filters:");
 const F = (name) => run(LIVE, `state.filter=${JSON.stringify(name)};`).html;
@@ -854,6 +883,36 @@ def check_log360():
         for name in ("core.dump", "disk.img", "archive.tar.gz", "readme"):
             check(f"name not pre-accepted (sniffed instead): {name}",
                   not serve.accepted_by_name(name))
+
+    # The rule -> ATT&CK mapping: source of truth in threat_intel/, attached by
+    # the adapter, and NEVER allowed to touch severity or ordering.
+    print("\nrule -> MITRE resolution (threat_intel/rule_mitre_map.py):")
+    import adapter
+    from rule_mitre_map import techniques_for_rule
+
+    got = techniques_for_rule("auth_bruteforce")
+    check("auth_bruteforce -> T1110", [t["id"] for t in got] == ["T1110"],
+          f"got {[t['id'] for t in got]}")
+    check("unmapped rule -> no techniques, never guessed",
+          techniques_for_rule("error_rate_spike") == []
+          and techniques_for_rule("disk_pressure") == []
+          and techniques_for_rule(None) == [])
+
+    report = {"source_file": "does-not-exist.log", "generated_at": "2026-08-18T00:00:00+00:00",
+              "lines_parsed": 12, "lines_unparsed": 0, "findings": [
+                  {"source": "detector", "severity": "high", "rule_id": "auth_bruteforce",
+                   "summary": "brute force", "timeline": []},
+                  {"source": "detector", "severity": "medium", "rule_id": "error_rate_spike",
+                   "summary": "burst", "timeline": []}]}
+    state = adapter.adapt(report)
+    mapped, unmapped = state["findings"]
+    check("adapter attaches the technique to a mapped finding",
+          [t["id"] for t in mapped["mitre"]] == ["T1110"])
+    check("adapter attaches NOTHING to an unmapped finding", unmapped["mitre"] == [])
+    check("severity is untouched by the mapping",
+          mapped["sev"] == "HIGH" and unmapped["sev"] == "MEDIUM")
+    check("finding order is untouched by the mapping",
+          [f["type"] for f in state["findings"]] == ["auth_bruteforce", "error_rate_spike"])
 
     return 0 if all(results) else 1
 

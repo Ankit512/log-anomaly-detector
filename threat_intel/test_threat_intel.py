@@ -92,6 +92,24 @@ def main():
     finally:
         tmp.unlink(missing_ok=True)
 
+    print("\nrule -> ATT&CK table (rule_mitre_map.py — what the console's tags come from):")
+    import re
+    from rule_mitre_map import RULE_TECHNIQUES, techniques_for_rule
+    for rule, techs in sorted(RULE_TECHNIQUES.items()):
+        check(f"{rule}: entries are well-formed",
+              techs and all(re.fullmatch(r"T\d{4}(\.\d{3})?", t.get("id", ""))
+                            and t.get("name") and t.get("tactic") for t in techs),
+              f"got {techs}")
+    check("auth_bruteforce resolves to T1110",
+          [t["id"] for t in techniques_for_rule("auth_bruteforce")] == ["T1110"])
+    check("unmapped rules resolve to NOTHING (a guess would be invented evidence)",
+          techniques_for_rule("disk_pressure") == []
+          and techniques_for_rule("error_rate_spike") == []
+          and techniques_for_rule("possible_break_in") == []
+          and techniques_for_rule(None) == [])
+    check("resolver returns copies (callers cannot mutate the table)",
+          techniques_for_rule("auth_bruteforce")[0] is not RULE_TECHNIQUES["auth_bruteforce"][0])
+
     print("\nMITRE technique resolution (bonus — needs a warm ATT&CK cache):")
     if not Path(DEFAULT_CACHE_PATH).exists():
         skipped.append("technique resolution")
@@ -107,6 +125,19 @@ def main():
             ids = [t["technique_id"] for t in (hit or {}).get("mitre_techniques", [])]
             check(f"{ip} resolves to {want['technique']}", want["technique"] in ids,
                   f"got {ids}")
+
+        # Cross-check the rule->technique table against the official STIX data:
+        # every inlined name must be the real technique name, every inlined
+        # tactic one of its official tactics.
+        for rule, techs in sorted(RULE_TECHNIQUES.items()):
+            for t in techs:
+                rec = mapper.lookup(t["id"])
+                check(f"table {t['id']} ({rule}) matches the official name",
+                      rec is not None and rec["name"] == t["name"],
+                      f"official {rec and rec['name']!r} vs table {t['name']!r}")
+                check(f"table {t['id']} tactic is official",
+                      rec is not None and t["tactic"] in rec["tactics"],
+                      f"official {rec and rec['tactics']} vs table {t['tactic']!r}")
 
     print()
     if failures:
