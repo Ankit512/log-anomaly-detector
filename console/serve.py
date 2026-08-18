@@ -212,6 +212,13 @@ def save_run(state):
     run_id = state.get("runId") or "run"
     stamp = (state.get("generatedAt") or "").replace(":", "").replace("-", "")[:15]
     path = RUNS_DIR / f"{stamp}-{run_id}.json".replace("/", "_")
+    # The stamp has second granularity, so two analyses of the same source in
+    # the same second would land on the SAME filename and the first would be
+    # silently overwritten — a dropped run in the history. Suffix instead.
+    serial = 1
+    while path.exists():
+        serial += 1
+        path = RUNS_DIR / f"{stamp}-{run_id}-{serial}.json".replace("/", "_")
     try:
         path.write_text(json.dumps(state))
     except OSError:
@@ -254,6 +261,85 @@ def load_run(name):
     if name not in {r["file"] for r in list_runs()}:
         raise ValueError("no such run")
     return json.loads((RUNS_DIR / name).read_text())
+
+
+def runs_summary():
+    """Aggregate view across ALL saved runs — the whole history, one shape.
+
+    Pure read of the history directory. Per-run severity counts and technique
+    frequencies are the SAME values the per-run dashboard shows (stored by
+    adapter.adapt; frequencies recomputed from the stored findings' mitre lists
+    when an older run predates the stored form — both come from the same
+    rule_mitre_map). Nothing is fabricated and nothing is silently dropped: a
+    history file that cannot be read appears in runs[] flagged "unreadable",
+    and a run that predates severity counts is flagged "dataComplete": false
+    and contributes zeros, never guesses.
+    """
+    entries = []
+    combined = {b: 0 for b in adapter.BUCKETS}
+    mitre = {}
+    total_lines = total_findings = 0
+
+    listed = list_runs()                      # already newest first
+
+    for r in listed:
+        try:
+            s = load_run(r["file"])
+        except (ValueError, OSError, json.JSONDecodeError):
+            entries.append({"file": r["file"], "runId": r.get("runId", ""),
+                            "unreadable": True})
+            continue
+
+        counts = s.get("severityCounts")
+        data_complete = isinstance(counts, dict)
+        if not data_complete:
+            counts = {}
+        freq = s.get("mitreFrequency")
+        if not isinstance(freq, list):
+            freq = adapter._mitre_frequency(s.get("findings", []))
+
+        entry = {
+            "file": r["file"],
+            "runId": s.get("runId", ""),
+            "generatedAt": s.get("generatedAt", ""),
+            "sourceLabel": s.get("sourceLabel", ""),
+            "linesParsed": s.get("linesParsed", 0),
+            "findingCount": len(s.get("findings", [])),
+            "severityCounts": {b: int(counts.get(b, 0)) for b in adapter.BUCKETS},
+            "topTechniques": freq[:5],
+            "unrecognized": bool(s.get("unrecognized")),
+            "dataComplete": data_complete,
+        }
+        entries.append(entry)
+
+        total_lines += entry["linesParsed"]
+        total_findings += entry["findingCount"]
+        for b in adapter.BUCKETS:
+            combined[b] += entry["severityCounts"][b]
+        for t in freq:                        # full frequency, not just the top slice
+            agg = mitre.setdefault(t["id"], {"id": t["id"], "name": t["name"],
+                                             "tactic": t["tactic"], "count": 0})
+            agg["count"] += t["count"]
+
+    # list_runs() filters files it cannot parse (right for the picker); an
+    # aggregate must not pretend they don't exist. Surface them, flagged.
+    if RUNS_DIR.exists():
+        listed_files = {r["file"] for r in listed}
+        for path in sorted(RUNS_DIR.glob("*.json"), key=lambda f: f.name, reverse=True):
+            if path.name not in listed_files:
+                entries.append({"file": path.name, "runId": "", "unreadable": True})
+
+    return {
+        "runs": entries,
+        "totals": {
+            "runCount": len(entries),
+            "linesParsed": total_lines,
+            "findingCount": total_findings,
+            "severityCounts": combined,
+            "mitreFrequency": sorted(mitre.values(),
+                                     key=lambda e: (-e["count"], e["id"])),
+        },
+    }
 
 
 def carry_marks(previous, state):
@@ -594,6 +680,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/runs":
             self._json({"runs": list_runs(), "current": STATE.get("runId")})
+        elif path == "/api/runs-summary":
+            self._json(runs_summary())
         elif path == "/api/compute":
             self._json(masked_compute())
         else:
