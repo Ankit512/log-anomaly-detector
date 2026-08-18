@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOC Dashboard — Overview</title>
+<style>
+/* ==========================================================================
+   SOC Overview — light-themed landing page. Self-contained: no CDN, no
+   external assets, works served locally or opened as a file. The dark
+   anomaly console stays the Alerts drill-down; this page only summarizes.
+   ========================================================================== */
+:root{
+  --bg:#f4f5f8;
+  --card:#ffffff;
+  --ink:#1a2033;
+  --ink-2:#5a6172;
+  --ink-3:#8a90a2;
+  --line:#e4e6ee;
+  --accent:#4f46e5;
+  --accent-soft:#eef0fd;
+
+  /* Severity status palette, validated for the light surface with the dataviz
+     six-checks script (lightness band, chroma, contrast PASS; MEDIUM↔HIGH sits
+     in the CVD 6–8 floor band and MEDIUM is a contrast WARN — both are legal
+     ONLY with secondary encoding, so every use of these colors carries the
+     count or name as text and stacked segments keep a 2px surface gap). */
+  --sev-critical:#991b1b;
+  --sev-high:#ea580c;
+  --sev-medium:#caa204;
+  --sev-low:#166534;
+
+  --radius:12px;
+  --shadow:0 1px 2px rgba(26,32,51,.06),0 4px 14px rgba(26,32,51,.06);
+  --font:"Inter",system-ui,-apple-system,sans-serif;
+  --mono:ui-monospace,Menlo,Monaco,"Cascadia Code",monospace;
+}
+*,*::before,*::after{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);
+  font-size:14px;line-height:1.5}
+h1,h2,h3{margin:0;font-weight:600;letter-spacing:-.01em}
+button{font:inherit;cursor:pointer}
+a{color:var(--accent);text-decoration:none}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.shell{display:flex;min-height:100vh}
+
+/* — sidebar — */
+.side{width:240px;flex:none;background:var(--card);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:18px 14px;gap:6px}
+.logo{display:flex;align-items:center;gap:10px;padding:4px 10px 16px}
+.logo-mark{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;
+  display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px}
+.logo b{font-size:15px}
+.logo span{display:block;font-size:10.5px;color:var(--ink-3)}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav-i{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  color:var(--ink-2);border:0;background:transparent;text-align:left;font-size:13.5px}
+.nav-i svg{flex:none;color:var(--ink-3)}
+.nav-i:hover{background:var(--bg)}
+.nav-i.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+.nav-i.on svg{color:var(--accent)}
+.nav-i.soon{opacity:.5;cursor:not-allowed}
+.soon-tag{margin-left:auto;font-size:9px;letter-spacing:.05em;text-transform:uppercase;
+  color:var(--ink-3);border:1px solid var(--line);border-radius:5px;padding:1px 5px}
+.side-sep{height:1px;background:var(--line);margin:10px 4px}
+
+/* — ingestion panel — */
+.ingest{padding:4px 6px;display:flex;flex-direction:column;gap:8px}
+.ingest-k{font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3);
+  padding:0 4px}
+.dropzone{border:1.5px dashed #c7cbdb;border-radius:10px;padding:16px 10px;text-align:center;
+  color:var(--ink-2);font-size:12px;background:var(--bg);cursor:pointer}
+.dropzone.hot{border-color:var(--accent);background:var(--accent-soft)}
+.dropzone b{display:block;color:var(--ink);font-size:12.5px;margin-bottom:2px}
+.dropzone span{font-size:10.5px;color:var(--ink-3)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  padding:7px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);
+  color:var(--ink);font-size:13px}
+.btn:hover{border-color:#c7cbdb;background:var(--bg)}
+.btn-primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn-primary:hover{background:#4338ca}
+.files{display:flex;flex-direction:column;gap:4px}
+.file{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2);
+  padding:4px 6px;border-radius:6px;background:var(--bg)}
+.file .ok{color:var(--sev-low);font-weight:700}
+.clear-all{font-size:11.5px;align-self:flex-end}
+.ingest-note{font-size:11px;color:var(--ink-3);padding:0 4px}
+
+/* — main column — */
+.main{flex:1;min-width:0;padding:22px 26px;display:flex;flex-direction:column;gap:18px}
+.topbar{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.topbar h1{font-size:21px}
+.topbar .sub{font-size:12.5px;color:var(--ink-2)}
+.topbar .acts{margin-left:auto;display:flex;gap:8px;align-items:center}
+select.btn{padding-right:8px}
+
+.banner{display:flex;align-items:center;gap:10px;padding:9px 14px;border-radius:10px;
+  background:#fdf6e3;border:1px solid #ecd9a0;color:#7a5d0e;font-size:12.5px}
+
+.grid{display:flex;gap:18px;align-items:flex-start}
+.col-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:18px}
+.col-side{width:320px;flex:none}
+
+/* — KPI cards — */
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:14px}
+.kpi{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:14px 16px;display:flex;flex-direction:column;gap:4px}
+.kpi-h{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--ink-2)}
+.kpi-h i{width:8px;height:8px;border-radius:50%;flex:none}
+.kpi-n{font-size:26px;font-weight:650;font-variant-numeric:tabular-nums}
+.kpi-d{font-size:11px;color:var(--ink-3)}
+.kpi-d.worse{color:var(--sev-critical)}
+.kpi-d.better{color:var(--sev-low)}
+
+/* — panels & charts — */
+.panels{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:18px}
+.panel{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);
+  padding:16px 18px;min-width:0}
+.panel-k{font-size:12.5px;font-weight:600;margin-bottom:12px;display:flex;
+  align-items:baseline;gap:8px}
+.panel-k span{font-weight:400;font-size:11px;color:var(--ink-3)}
+.donut-wrap{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.donut-wrap svg{flex:none}
+.legend{display:flex;flex-direction:column;gap:6px;font-size:12px;min-width:150px}
+.legend-r{display:flex;align-items:center;gap:8px}
+.legend-r i{width:9px;height:9px;border-radius:3px;flex:none}
+.legend-r b{margin-left:auto;font-variant-numeric:tabular-nums}
+.legend-r span{color:var(--ink-3);font-size:11px}
+.legend-row{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11.5px;color:var(--ink-2)}
+.legend-row .legend-r{gap:6px}
+.axis{display:flex;justify-content:space-between;font-size:10.5px;font-family:var(--mono);
+  color:var(--ink-3);margin-top:4px}
+.hbar-rows{display:flex;flex-direction:column;gap:8px}
+.hbar{display:flex;align-items:center;gap:10px;font-size:12px}
+.hbar .lbl{flex:none;width:150px;color:var(--ink-2);overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap}
+.hbar svg{flex:1;height:14px;display:block}
+.hbar b{flex:none;min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
+.chart-empty{color:var(--ink-3);font-size:12.5px;padding:14px 0}
+
+/* — AI analyst — */
+.ai{display:flex;flex-direction:column;gap:10px;max-height:calc(100vh - 120px)}
+.ai-note{font-size:11.5px;color:var(--ink-2);background:var(--bg);border-radius:8px;padding:8px 10px}
+.ai-chips{display:flex;flex-direction:column;gap:6px}
+.ai-chip{text-align:left;font-size:12px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink-2)}
+.ai-chip:hover{border-color:var(--accent);color:var(--accent)}
+.ai-chip.hot{background:var(--accent-soft);border-color:var(--accent);color:var(--accent);font-weight:600}
+.ai-log{flex:1;min-height:120px;overflow:auto;display:flex;flex-direction:column;gap:8px;
+  font-size:12.5px}
+.ai-msg{padding:8px 11px;border-radius:10px;max-width:95%;white-space:pre-wrap}
+.ai-msg.q{background:var(--accent-soft);align-self:flex-end}
+.ai-msg.a{background:var(--bg)}
+.ai-msg.err{background:#fdecec;color:#8f1d1d}
+.ai-in{display:flex;gap:8px}
+.ai-in input{flex:1;min-width:0;padding:8px 11px;border-radius:8px;border:1px solid var(--line);
+  font:inherit;font-size:13px;background:var(--card);color:var(--ink)}
+.ai-foot{font-size:11px;color:var(--ink-3);font-family:var(--mono)}
+
+/* — latest alerts table — */
+.tbl{width:100%;border-collapse:collapse;font-size:12.5px}
+.tbl th{text-align:left;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;
+  color:var(--ink-3);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+.tbl tr:last-child td{border-bottom:0}
+.tbl .t{font-family:var(--mono);font-size:11.5px;color:var(--ink-2);white-space:nowrap}
+.badge{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:999px;
+  font-size:10.5px;font-weight:600;color:#fff}
+.phase{display:inline-block;padding:2px 8px;border-radius:6px;background:var(--bg);
+  border:1px solid var(--line);font-size:11px;color:var(--ink-2);white-space:nowrap}
+.tac{display:inline-block;padding:1px 7px;border-radius:5px;background:var(--accent-soft);
+  color:var(--accent);font-size:10.5px;margin:1px 2px 1px 0}
+.src{font-family:var(--mono);font-size:11.5px;color:var(--ink-2)}
+
+/* — coming soon strip — */
+.soon-strip{background:var(--card);border:1.5px dashed var(--line);border-radius:var(--radius);
+  padding:14px 18px;color:var(--ink-3);font-size:12.5px}
+.soon-strip b{color:var(--ink-2)}
+
+@media (max-width:1180px){.grid{flex-direction:column}.col-side{width:auto}}
+@media (max-width:900px){.shell{flex-direction:column}.side{width:auto;border-right:0;
+  border-bottom:1px solid var(--line)}}
+</style>
+</head>
+<body>
+<div id="app" class="shell"></div>
+
+<script>
+"use strict";
+/* ==========================================================================
+   SOC Overview — summary landing page. Everything here is READ-ONLY display
+   of what the analyzer already decided: rules own severity, MITRE tags and
+   the attacker-status phase are derived groupings from the backend, and the
+   AI analyst only explains — it never changes a verdict.
+   ========================================================================== */
+
+const SEV = { CRITICAL: "#991b1b", HIGH: "#ea580c", MEDIUM: "#caa204", LOW: "#166534" };
+const SEV_ORDER = ["CRITICAL", "HIGH", "MEDIUM", "LOW"];
+
+/* Mock matching Toby's /api/overview contract EXACTLY, used only when no
+   backend answers — and then the page says so with a visible banner. */
+const MOCK = {
+  generatedAt: "2026-08-18T14:00:00Z",
+  timeWindowLabel: "Last 24 Hours",
+  kpis: {
+    total: 24, critical: 0, high: 22, medium: 2, low: 0,
+    deltas: { total: null, critical: null, high: null, medium: null, low: null },
+  },
+  severityDonut: [
+    { bucket: "CRITICAL", count: 0, pct: 0 },
+    { bucket: "HIGH", count: 22, pct: 92 },
+    { bucket: "MEDIUM", count: 2, pct: 8 },
+    { bucket: "LOW", count: 0, pct: 0 },
+  ],
+  alertsOverTime: { bins: [
+    { t: "2026-08-18T10:00:00Z", critical: 0, high: 3, medium: 0, low: 0 },
+    { t: "2026-08-18T11:00:00Z", critical: 0, high: 9, medium: 1, low: 0 },
+    { t: "2026-08-18T12:00:00Z", critical: 0, high: 6, medium: 0, low: 0 },
+    { t: "2026-08-18T13:00:00Z", critical: 0, high: 4, medium: 1, low: 0 },
+  ] },
+  mitreTactics: [
+    { tactic: "Credential Access", count: 23 },
+    { tactic: "Initial Access", count: 4 },
+  ],
+  latestAlerts: [
+    { id: "detector-0", time: "2026-08-18 12:41:07", severity: "HIGH",
+      attackerStatus: "Breaking In", tactics: ["Credential Access"],
+      name: "Brute-force: 24 failures for root from 220.135.151.1",
+      source: "samples/Linux_2k.log" },
+    { id: "detector-1", time: "2026-08-18 12:39:55", severity: "HIGH",
+      attackerStatus: "Breaking In", tactics: ["Credential Access"],
+      name: "Brute-force: 11 failures from 218.22.3.51",
+      source: "samples/Linux_2k.log" },
+    { id: "detector-2", time: "2026-08-18 12:22:13", severity: "MEDIUM",
+      attackerStatus: "Planning / Probing", tactics: [],
+      name: "Error-rate spike — 7 error-level events in 60s",
+      source: "samples/Linux_2k.log" },
+  ],
+  ingestion: { acceptedLabel: "CSV, JSON, TXT, RAW, HTML",
+               files: [{ name: "Linux_2k.log", ok: true }] },
+  model: "llama3.1:8b",
+};
+
+let DATA = null;         // filled at boot
+let usingMock = false;   // true -> the sample-data banner shows
+const aiLog = [];        // {who:"q"|"a"|"err", text}
+
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+  .replace(/"/g, "&quot;");
+
+/* Minimal geometric inline icons — no icon font, no CDN. */
+function icon(name) {
+  const P = {
+    overview: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+    alerts: '<path d="M12 3 L21 19 L3 19 Z"/><line x1="12" y1="10" x2="12" y2="14"/><line x1="12" y1="16.5" x2="12" y2="17"/>',
+    incidents: '<circle cx="12" cy="12" r="9"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="12" y1="16" x2="12" y2="16.5"/>',
+    threat: '<path d="M12 3 L20 7 V12 C20 17 16.5 20 12 21 C7.5 20 4 17 4 12 V7 Z"/>',
+    assets: '<rect x="3" y="5" width="18" height="12" rx="1.5"/><line x1="8" y1="20" x2="16" y2="20"/>',
+    reports: '<rect x="5" y="3" width="14" height="18" rx="1.5"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/>',
+    cases: '<rect x="3" y="8" width="18" height="12" rx="1.5"/><path d="M9 8 V6 a2 2 0 0 1 2-2 h2 a2 2 0 0 1 2 2 V8"/>',
+    settings: '<circle cx="12" cy="12" r="3.2"/><path d="M12 2.5 V6 M12 18 V21.5 M2.5 12 H6 M18 12 H21.5 M5 5 L7.5 7.5 M16.5 16.5 L19 19 M19 5 L16.5 7.5 M7.5 16.5 L5 19"/>',
+    logout: '<path d="M9 4 H5 V20 H9"/><path d="M14 8 L19 12 L14 16"/><line x1="19" y1="12" x2="9" y2="12"/>',
+  };
+  return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+    stroke="currentColor" stroke-width="1.7" stroke-linecap="round"
+    stroke-linejoin="round" aria-hidden="true">${P[name] || ""}</svg>`;
+}
+
+// --------------------------------------------------------------------------
+// Sidebar
+// --------------------------------------------------------------------------
+function sidebar() {
+  const ing = DATA.ingestion || {};
+  const files = (ing.files || []).map((f) => `
+    <div class="file"><span class="ok">✓</span><span>${esc(f.name)}</span></div>`).join("");
+
+  const soon = (name, key) => `
+    <button class="nav-i soon" disabled title="Not built yet — nothing behind this item">
+      ${icon(key)}${name}<span class="soon-tag">coming soon</span>
+    </button>`;
+
+  return `
+  <aside class="side">
+    <div class="logo">
+      <div class="logo-mark">S</div>
+      <div><b>itsoc</b><span>security operations</span></div>
+    </div>
+    <nav class="nav">
+      <button class="nav-i on">${icon("overview")}Overview</button>
+      <a class="nav-i" href="/" title="Open the Alerts review console">${icon("alerts")}Alerts</a>
+      ${soon("Incidents", "incidents")}
+      ${soon("Threat Intel", "threat")}
+      ${soon("Assets", "assets")}
+      ${soon("Reports", "reports")}
+      ${soon("Cases", "cases")}
+      ${soon("Settings", "settings")}
+      <button class="nav-i soon" disabled title="No session system yet">${icon("logout")}Logout</button>
+    </nav>
+    <div class="side-sep"></div>
+    <div class="ingest">
+      <div class="ingest-k">Data Ingestion</div>
+      <div class="dropzone" id="dropzone" data-act="browse">
+        <b>Upload Logs</b>
+        Drag &amp; drop or select files
+        <span>Accepted: ${esc(ing.acceptedLabel || "CSV, JSON, TXT, RAW, HTML")}</span>
+      </div>
+      <input type="file" id="ingestFile" multiple style="display:none">
+      <button class="btn" data-act="browse">Browse Files</button>
+      ${files ? `<div class="files">${files}</div>
+        <a href="#" class="clear-all" data-act="clear-files">Clear All</a>` : ""}
+      <div class="ingest-note" id="ingestNote">Files are analyzed locally by the rules
+        engine; open Alerts to review results.</div>
+    </div>
+  </aside>`;
+}
+
+// --------------------------------------------------------------------------
+// KPI cards
+// --------------------------------------------------------------------------
+function kpiCard(label, count, delta, color) {
+  /* Delta renders ONLY when a prior period exists; a null delta means "no
+     previous window to compare against", and nothing is shown. More alerts is
+     worse, so up = red, down = green. */
+  const d = delta
+    ? `<div class="kpi-d ${delta.dir === "up" ? "worse" : "better"}">
+         ${delta.dir === "up" ? "▲" : "▼"} ${esc(delta.pct)}% vs previous</div>`
+    : "";
+  return `
+  <div class="kpi">
+    <div class="kpi-h"><i style="background:${color}"></i>${esc(label)}</div>
+    <div class="kpi-n">${Number(count || 0).toLocaleString()}</div>
+    ${d}
+  </div>`;
+}
+
+function kpiRow() {
+  const k = DATA.kpis || { deltas: {} };
+  const d = k.deltas || {};
+  return `
+  <div class="kpis">
+    ${kpiCard("Total Alerts", k.total, d.total, "var(--accent)")}
+    ${kpiCard("Critical", k.critical, d.critical, SEV.CRITICAL)}
+    ${kpiCard("High", k.high, d.high, SEV.HIGH)}
+    ${kpiCard("Medium", k.medium, d.medium, SEV.MEDIUM)}
+    ${kpiCard("Low", k.low, d.low, SEV.LOW)}
+  </div>`;
+}
+
+// --------------------------------------------------------------------------
+// Charts — inline SVG only, numbers always present as text
+// --------------------------------------------------------------------------
+function donutPanel() {
+  const rows = (DATA.severityDonut || []).filter((x) => SEV[x.bucket]);
+  const total = rows.reduce((s, x) => s + (x.count || 0), 0);
+  if (!total) {
+    return `<div class="panel"><div class="panel-k">Alerts by Severity</div>
+      <div class="chart-empty">No alerts in this window.</div></div>`;
+  }
+  const R = 44, C = 2 * Math.PI * R;
+  let off = 0;
+  const segs = rows.filter((x) => x.count > 0).map((x) => {
+    const frac = x.count / total;
+    const seg = `<circle r="${R}" cx="60" cy="60" fill="none"
+      stroke="${SEV[x.bucket]}" stroke-width="14"
+      stroke-dasharray="${(frac * C - 2).toFixed(1)} ${(C - frac * C + 2).toFixed(1)}"
+      stroke-dashoffset="${(-off * C).toFixed(1)}"
+      transform="rotate(-90 60 60)"><title>${esc(x.bucket)} — ${x.count} (${x.pct}%)</title></circle>`;
+    off += frac;
+    return seg;
+  }).join("");
+  const legend = rows.map((x) => `
+    <div class="legend-r"><i style="background:${SEV[x.bucket]}"></i>
+      ${esc(x.bucket)} <span>${x.pct}%</span><b>${x.count}</b></div>`).join("");
+  return `
+  <div class="panel">
+    <div class="panel-k">Alerts by Severity</div>
+    <div class="donut-wrap">
+      <svg class="chart-donut" width="120" height="120" viewBox="0 0 120 120" role="img"
+           aria-label="alerts by severity">
+        ${segs}
+        <text x="60" y="57" text-anchor="middle" font-size="22" font-weight="650"
+              fill="#1a2033">${total}</text>
+        <text x="60" y="74" text-anchor="middle" font-size="9" fill="#8a90a2">TOTAL</text>
+      </svg>
+      <div class="legend">${legend}</div>
+    </div>
+  </div>`;
+}
+
+function overTimePanel() {
+  const bins = (DATA.alertsOverTime || {}).bins || [];
+  if (!bins.length) {
+    return `<div class="panel"><div class="panel-k">Alerts Over Time</div>
+      <div class="chart-empty">No alerts in this window.</div></div>`;
+  }
+  const KEYS = ["low", "medium", "high", "critical"];      // bottom -> top
+  const COLOR = { low: SEV.LOW, medium: SEV.MEDIUM, high: SEV.HIGH, critical: SEV.CRITICAL };
+  const max = Math.max(1, ...bins.map((b) => KEYS.reduce((s, k) => s + (b[k] || 0), 0)));
+  const W = 300, H = 110, bw = W / bins.length;
+  const bars = bins.map((b, i) => {
+    let y = H;
+    return KEYS.map((k) => {
+      const v = b[k] || 0;
+      if (!v) return "";
+      const h = (v / max) * (H - 6);
+      y -= h;
+      const label = `${esc(String(b.t).slice(11, 16))} — ${esc(k)}: ${v}`;
+      const rect = `<rect x="${(i * bw + 3).toFixed(1)}" y="${y.toFixed(1)}"
+        width="${(bw - 6).toFixed(1)}" height="${Math.max(1.5, h - 2).toFixed(1)}" rx="1.5"
+        fill="${COLOR[k]}"><title>${label}</title></rect>`;
+      return rect;
+    }).join("");
+  }).join("");
+  const legend = SEV_ORDER.map((s) => `
+    <div class="legend-r"><i style="background:${SEV[s]}"></i>${s.toLowerCase()}</div>`).join("");
+  return `
+  <div class="panel">
+    <div class="panel-k">Alerts Over Time <span>peak bin ${max}</span></div>
+    <svg class="chart-overtime" viewBox="0 0 ${W} ${H}" width="100%" height="110"
+         preserveAspectRatio="none" role="img" aria-label="alerts over time">${bars}</svg>
+    <div class="axis"><span>${esc(String(bins[0].t).slice(11, 16))}</span>
+      <span>${esc(String(bins[bins.length - 1].t).slice(11, 16))}</span></div>
+    <div class="legend-row">${legend}</div>
+  </div>`;
+}
+
+function tacticsPanel() {
+  const rows = DATA.mitreTactics || [];
+  if (!rows.length) {
+    return `<div class="panel"><div class="panel-k">Top Attack Tactics (MITRE)</div>
+      <div class="chart-empty">No tactic data — nothing mapped in this window.</div></div>`;
+  }
+  const max = Math.max(1, ...rows.map((r) => r.count || 0));
+  const bars = rows.map((r) => `
+    <div class="hbar">
+      <span class="lbl" title="${esc(r.tactic)}">${esc(r.tactic)}</span>
+      <svg class="chart-tactic" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
+           aria-label="${esc(r.tactic)}: ${r.count}">
+        <rect x="0" y="3" width="${Math.max(1.5, (r.count / max) * 100).toFixed(1)}"
+              height="8" rx="2" fill="var(--accent)"></rect>
+      </svg>
+      <b>${r.count}</b>
+    </div>`).join("");
+  return `
+  <div class="panel">
+    <div class="panel-k">Top Attack Tactics (MITRE)
+      <span>derived tags — not verdicts</span></div>
+    <div class="hbar-rows">${bars}</div>
+  </div>`;
+}
+
+// --------------------------------------------------------------------------
+// AI analyst
+// --------------------------------------------------------------------------
+function aiPanel() {
+  const msgs = aiLog.map((m) => `<div class="ai-msg ${m.who}">${esc(m.text)}</div>`).join("");
+  return `
+  <div class="panel ai">
+    <div class="panel-k">AI Analyst <span>Ollama · local</span></div>
+    <div class="ai-note">Advisory only: the model explains findings in plain language.
+      Severities and verdicts come from the deterministic rules and are never changed here.</div>
+    <div class="ai-chips">
+      <button class="ai-chip hot" data-ask="Show me the top 5 critical alerts">
+        Show me the top 5 critical alerts</button>
+      <button class="ai-chip" data-ask="Summarize this run for a handoff">
+        Summarize this run for a handoff</button>
+      <button class="ai-chip" data-ask="Which host should I look at first?">
+        Which host should I look at first?</button>
+    </div>
+    <div class="ai-log" id="aiLog">${msgs
+      || '<div class="ai-msg a">Ask about the current run — e.g. what a finding means, or where to start.</div>'}</div>
+    <div class="ai-in">
+      <input type="text" id="aiInput" placeholder="Ask anything about your logs..."
+             aria-label="Ask the AI analyst">
+      <button class="btn btn-primary" data-act="ask">Send</button>
+    </div>
+    <div class="ai-foot">Model: ${esc(DATA.model || "not configured")}</div>
+  </div>`;
+}
+
+// --------------------------------------------------------------------------
+// Latest alerts table
+// --------------------------------------------------------------------------
+function alertsTable() {
+  const rows = DATA.latestAlerts || [];
+  const body = rows.length ? rows.map((a) => `
+    <tr>
+      <td class="t">${esc(a.time)}</td>
+      <td><span class="badge" style="background:${SEV[a.severity] || "#8a90a2"}">${esc(a.severity)}</span></td>
+      <td><span class="phase" title="Derived kill-chain grouping of this alert's MITRE tactics — a display aid, not a verdict">${esc(a.attackerStatus || "—")}</span></td>
+      <td>${(a.tactics || []).map((t) => `<span class="tac">${esc(t)}</span>`).join("") || "—"}</td>
+      <td>${esc(a.name)}</td>
+      <td class="src">${esc(a.source || "—")}</td>
+      <td><a href="/" title="Open in the Alerts console">View</a></td>
+    </tr>`).join("")
+    : `<tr><td colspan="7" class="chart-empty">No alerts in this window.</td></tr>`;
+  return `
+  <div class="panel">
+    <div class="panel-k">Latest Alerts <span>most recent first · drill into Alerts for evidence</span></div>
+    <div style="overflow-x:auto"><table class="tbl">
+      <thead><tr><th>Time</th><th>Severity</th><th>Attacker Status</th>
+        <th>Primary MITRE Tactics</th><th>Alert</th><th>Source</th><th>Action</th></tr></thead>
+      <tbody>${body}</tbody>
+    </table></div>
+  </div>`;
+}
+
+// --------------------------------------------------------------------------
+// Page
+// --------------------------------------------------------------------------
+function render() {
+  document.getElementById("app").innerHTML = `
+  ${sidebar()}
+  <main class="main">
+    <div class="topbar">
+      <div><h1>SOC Dashboard</h1><div class="sub">Security Overview</div></div>
+      <div class="acts">
+        <select class="btn" id="windowSel" aria-label="time window">
+          <option>Last 1 Hour</option>
+          <option selected>${esc(DATA.timeWindowLabel || "Last 24 Hours")}</option>
+          <option>Last 7 Days</option>
+        </select>
+        <button class="btn" data-act="refresh">Refresh</button>
+        <button class="btn" disabled title="Filtering is not built yet">Filters
+          <span class="soon-tag">coming soon</span></button>
+      </div>
+    </div>
+
+    ${usingMock ? `<div class="banner">Sample data — no backend answered /api/overview.
+      Start the console server to see the real run.</div>` : ""}
+
+    <div class="grid">
+      <div class="col-main">
+        ${kpiRow()}
+        <div class="panels">
+          ${donutPanel()}
+          ${overTimePanel()}
+          ${tacticsPanel()}
+        </div>
+        ${alertsTable()}
+        <div class="soon-strip"><b>Operational metrics — coming soon.</b>
+          Open incidents, MTTD, MTTR and asset/user risk need incident-tracking
+          subsystems that do not exist yet, so nothing is shown here rather than
+          an invented number.</div>
+      </div>
+      <div class="col-side">${aiPanel()}</div>
+    </div>
+  </main>`;
+}
+
+// --------------------------------------------------------------------------
+// Behaviour
+// --------------------------------------------------------------------------
+async function ask(question) {
+  if (!question || !question.trim()) return;
+  aiLog.push({ who: "q", text: question.trim() });
+  render();
+  try {
+    const res = await fetch("/api/ask", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question: question.trim() }),
+    });
+    const out = await res.json();
+    if (res.ok && out && out.answer) aiLog.push({ who: "a", text: out.answer });
+    else aiLog.push({ who: "err", text: (out && out.error) || "The analyst backend returned no answer." });
+  } catch {
+    aiLog.push({ who: "err",
+      text: "The analyst backend is not reachable — start the console server to use this." });
+  }
+  render();
+  const log = document.getElementById("aiLog");
+  if (log && log.scrollTo) log.scrollTo(0, 1e9);
+}
+
+async function uploadFiles(fileList) {
+  const note = document.getElementById("ingestNote");
+  if (!fileList || !fileList.length) return;
+  const form = new FormData();
+  form.append("file", fileList[0]);
+  try {
+    const res = await fetch("/api/analyze", { method: "POST", body: form });
+    if (note) note.textContent = res.ok || res.status === 202
+      ? "Analysis started — open Alerts to watch progress and review findings."
+      : "The server refused this file — open Alerts for details.";
+  } catch {
+    if (note) note.textContent =
+      "No backend reachable — start the console server, then upload here or in Alerts.";
+  }
+}
+
+function refresh() { boot(true); }
+
+document.addEventListener("click", (e) => {
+  const t = e.target;
+  const askChip = t.closest("[data-ask]");
+  if (askChip) return ask(askChip.dataset.ask);
+  const act = t.closest("[data-act]");
+  if (!act) return;
+  switch (act.dataset.act) {
+    case "ask": {
+      const inp = document.getElementById("aiInput");
+      return ask(inp && inp.value).then(() => { const i2 = document.getElementById("aiInput"); if (i2) i2.value = ""; });
+    }
+    case "browse": {
+      const f = document.getElementById("ingestFile");
+      return f && f.click();
+    }
+    case "clear-files": {
+      e.preventDefault();
+      if (DATA.ingestion) DATA.ingestion.files = [];
+      return render();
+    }
+    case "refresh": return refresh();
+    default: return;
+  }
+});
+
+document.addEventListener("change", (e) => {
+  if (e.target && e.target.id === "ingestFile") return uploadFiles(e.target.files);
+  if (e.target && e.target.id === "windowSel") return refresh();
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && document.activeElement && document.activeElement.id === "aiInput") {
+    ask(document.activeElement.value);
+    document.activeElement.value = "";
+  }
+});
+
+document.addEventListener("dragover", (e) => {
+  const z = document.getElementById("dropzone");
+  if (z) { e.preventDefault(); z.classList.add("hot"); }
+});
+document.addEventListener("drop", (e) => {
+  const z = document.getElementById("dropzone");
+  if (!z) return;
+  e.preventDefault();
+  z.classList.remove("hot");
+  if (e.dataTransfer) uploadFiles(e.dataTransfer.files);
+});
+
+/* Data bootstrap: injected test data, then the backend, then the mock — and
+   the mock is always labeled as sample data, never passed off as real. */
+function boot(isRefresh) {
+  if (typeof window !== "undefined" && window.OVERVIEW_DATA && !isRefresh) {
+    DATA = window.OVERVIEW_DATA;
+    usingMock = false;
+    return render();
+  }
+  const sel = document.getElementById("windowSel");
+  const win = sel ? encodeURIComponent(sel.value) : "";
+  fetch(`/api/overview${win ? `?window=${win}` : ""}`, { cache: "no-store" })
+    .then((r) => (r.ok ? r.json() : null))
+    .then((d) => {
+      if (d && d.kpis) { DATA = d; usingMock = false; }
+      else if (!DATA) { DATA = MOCK; usingMock = true; }
+      render();
+    })
+    .catch(() => {
+      if (!DATA) { DATA = MOCK; usingMock = true; }
+      render();
+    });
+  if (!DATA) { DATA = MOCK; usingMock = true; render(); }
+}
+
+boot();
+</script>
+</body>
+</html>
