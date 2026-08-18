@@ -62,7 +62,7 @@ DATA = {
          "attackerStatus": "Damaging / Stealing", "tactics": ["Command and Control"],
          "name": "Outbound to 45.153.160.2:4444 (blocked)", "source": "fw.log"},
     ],
-    "ingestion": {"acceptedLabel": "CSV, JSON, TXT, RAW, HTML",
+    "ingestion": {"acceptedLabel": "LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text",
                   "files": [{"name": "auth.log", "ok": True},
                             {"name": "fw.log", "ok": True}]},
     "model": "llama3.1:8b",
@@ -120,7 +120,7 @@ check("no unbuilt item links anywhere", (h.match(/href="/g) || []).length
       === (h.match(/href="\/alerts/g) || []).length + (h.match(/href="#"/g) || []).length);
 check("upload dropzone present", h.includes("Upload Logs")
       && h.includes("Drag &amp; drop or select files"));
-check("accepted formats listed", h.includes("CSV, JSON, TXT, RAW, HTML"));
+check("accepted formats listed", h.includes("LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text"));
 check("Browse Files button", h.includes("Browse Files"));
 check("ingested files listed with a check", h.includes("auth.log") && h.includes(">✓<"));
 check("Clear All offered", h.includes("Clear All"));

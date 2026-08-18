@@ -71,6 +71,23 @@ export interface ConsoleState {
   findings: Finding[];
   manifest?: { detector_sha256?: string | null; ruleset?: string | null } & Record<string, unknown>;
   sourceLabel?: string;
+  /** Set when the model endpoint was down: the run is rules-only (verdicts
+   *  complete, advisory explanations skipped) and this says so. */
+  llmNote?: string | null;
+}
+
+/** /api/progress — the running analysis job, polled after POST /api/analyze. */
+export interface AnalyzeJob {
+  status: "idle" | "running" | "done" | "error";
+  phase?: string;
+  done?: number;
+  total?: number;
+  findings?: number;
+  label?: string;
+  error?: string | null;
+  note?: string | null;
+  etaSeconds?: number | null;
+  partialReady?: boolean;
 }
 
 /** /api/metrics — soc.metrics(): every value is derived or null, never guessed.
@@ -101,6 +118,7 @@ export const api = {
   consoleState: () => getJson<ConsoleState>(`/console_state.json?t=${Date.now()}`),
   runsSummary: () => getJson<{ runs: RunSummary[] }>("/api/runs-summary"),
   metrics: () => getJson<Metrics>("/api/metrics"),
+  progress: () => getJson<AnalyzeJob>("/api/progress"),
 
   ask: async (question: string): Promise<{ answer?: string; error?: string }> => {
     const res = await fetch("/api/ask", {

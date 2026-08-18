@@ -80,10 +80,15 @@ DOWNLOAD_TIMEOUT = 60
 # an accepted file whose format nothing recognizes still comes back as
 # "0 lines parsed" with the unrecognized-format banner, never a fake all-clear.
 
-ACCEPT_EXTS = {".log", ".txt", ".out", ".syslog", ".messages", ".err"}
+ACCEPT_EXTS = {".log", ".txt", ".out", ".syslog", ".messages", ".err",
+               ".csv", ".tsv", ".xml", ".json", ".jsonl", ".ndjson",
+               ".html", ".htm", ".raw"}
 ACCEPT_BARE_NAMES = {"syslog", "messages", "auth"}      # extension-less system logs
 SNIFF_BYTES = 64 * 1024
 REJECT_NOT_TEXT = "This doesn't look like a text log file."
+# What the UIs tell the user. Kept next to ACCEPT_EXTS so the promise and the
+# gate cannot drift apart; any other extension still gets the text sniff.
+ACCEPTED_LABEL = "LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text"
 
 
 def accepted_by_name(filename):
@@ -476,7 +481,7 @@ def overview_state(window=None):
         "mitreTactics": [{"tactic": k, "count": v} for k, v in
                          sorted(tactic_counts.items(), key=lambda kv: (-kv[1], kv[0]))],
         "latestAlerts": latest,
-        "ingestion": {"acceptedLabel": "CSV, JSON, TXT, RAW, HTML",
+        "ingestion": {"acceptedLabel": ACCEPTED_LABEL,
                       "files": files[:8]},
         "model": (COMPUTE.get("model") or la.LLM_MODEL
                   if COMPUTE.get("mode") == "remote" else la.LLM_MODEL),
@@ -693,6 +698,22 @@ def run_analyzer(input_path, compare, out_prefix, extra_args=(), on_progress=Non
     return Path(f"{out_prefix}.json")
 
 
+def llm_reachable(timeout=2):
+    """Probe the explanation endpoint. Used ONLY to decide the rules-only
+    fallback — never to change what the rules decide. An HTTP error status
+    still counts as reachable; only a connection failure does not."""
+    try:
+        req = urllib.request.Request(
+            la.LLM_BASE_URL.rstrip("/") + "/models",
+            headers={"Authorization": f"Bearer {la.LLM_API_KEY}"})
+        with urllib.request.urlopen(req, timeout=timeout):
+            return True
+    except urllib.error.HTTPError:
+        return True
+    except Exception:
+        return False
+
+
 def analyze(source, value, compare, filename=None, data=None, threat_intel=None):
     """Resolve a source to a file, analyze it, and become the console's state."""
     global STATE
@@ -733,6 +754,9 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
         state["sourceKind"] = source
         state["sourceLabel"] = (value if source in ("sample", "url")
                                 else (filename or "uploaded file"))
+        # Honest surface: when the model endpoint was down, the run carries the
+        # reason its findings have no explanations. (Bound before any publish.)
+        state["llmNote"] = llm_note
         STATE = state
         try:
             STATE_FILE.write_text(json.dumps(state, indent=2))
@@ -765,7 +789,19 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
     # Remote compute: the analyzer run is rules-only, so not one byte of log
     # text leaves during analysis. Explanations happen later, on demand, and
     # only through the redaction choke point in explain_finding().
-    extra = ("--rules-only",) if COMPUTE.get("mode") == "remote" else ()
+    extra, llm_note = (), None
+    if COMPUTE.get("mode") == "remote":
+        extra = ("--rules-only",)
+    elif not llm_reachable():
+        # A downed model endpoint must not block analysis: rules own severity
+        # and verdicts, so the run is complete without it — only the advisory
+        # explanations are skipped, and the run says so instead of erroring.
+        extra = ("--rules-only",)
+        llm_note = (f"model endpoint unreachable ({la.LLM_BASE_URL}) — "
+                    "rules-only run; verdicts are complete, advisory "
+                    "explanations skipped")
+        set_job(note=llm_note)
+        print(f"  {llm_note}", flush=True)
     run_analyzer(log_path, compare, work / "run", extra_args=extra,
                  on_progress=on_progress)
     state = publish(json.loads(report_path.read_text()), partial=False)

@@ -213,7 +213,7 @@ console.log("0. log-source picker (serve.py started with no --input):");
   check("(b) states the file never leaves the machine",
         p.includes("never leaves this machine"));
   check("(b) accept attr lists the broadened types",
-        p.includes('accept=".log,.txt,.out,.syslog,.messages,.err,.1,.2"'));
+        p.includes('accept=".log,.txt,.out,.syslog,.messages,.err,.csv,.tsv,.xml,.json,.jsonl,.ndjson,.html,.htm,.raw,.1,.2"'));
   check("(b) hint names the accepted types", p.includes("reads as plain text"));
   check("(c) URL field + fetch action", p.includes('id="urlInput"') && p.includes('data-act="fetch"'));
   check("(c) suggested LogHub chips", p.includes("data-suggest="));
@@ -1052,6 +1052,8 @@ def check_log360():
 
         # Name gate: every promised name form is accepted without sniffing.
         for name in ("a.log", "a.txt", "a.out", "a.syslog", "a.messages", "a.err",
+                     "a.csv", "a.tsv", "a.xml", "a.json", "a.jsonl", "a.ndjson",
+                     "a.html", "a.htm", "a.raw",
                      "app.log.1", "app.log.2", "syslog", "messages", "auth"):
             check(f"name accepted: {name}", serve.accepted_by_name(name))
         for name in ("core.dump", "disk.img", "archive.tar.gz", "readme"):
@@ -1718,7 +1720,7 @@ def check_soc_overview():
                 check("unmapped rule -> blank attackerStatus and no tactics",
                       latest[2]["attackerStatus"] == "" and latest[2]["tactics"] == [])
                 check("ingestion label + current source flagged ok",
-                      ov["ingestion"]["acceptedLabel"] == "CSV, JSON, TXT, RAW, HTML"
+                      ov["ingestion"]["acceptedLabel"] == "LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text"
                       and ov["ingestion"]["files"][0] == {"name": "attack.log", "ok": True})
                 check("model is the effective LLM model", ov["model"] == la.LLM_MODEL)
 

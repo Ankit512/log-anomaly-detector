@@ -16,13 +16,19 @@ export function renderApp(ui: ReactElement, { route = "/" } = {}) {
   );
 }
 
-/** Route fetch by substring match; anything unrouted 404s. */
+/** Route fetch by substring match; anything unrouted 404s. A route value with
+ *  `__status` responds with that HTTP status (non-2xx => ok: false). */
 export function mockFetch(routes: Record<string, unknown>) {
   vi.stubGlobal("fetch", vi.fn(async (url: RequestInfo | URL) => {
     const u = String(url);
     for (const [k, v] of Object.entries(routes)) {
       if (u.includes(k)) {
-        return { ok: true, status: 200, json: async () => v } as Response;
+        const { __status, ...body } = (v ?? {}) as Record<string, unknown>;
+        const status = typeof __status === "number" ? __status : 200;
+        return {
+          ok: status >= 200 && status < 300, status,
+          json: async () => (typeof __status === "number" ? body : v),
+        } as Response;
       }
     }
     return { ok: false, status: 404, json: async () => ({}) } as Response;
