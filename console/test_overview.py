@@ -110,14 +110,14 @@ check("no sample-data banner when real data is injected", !h.includes("Sample da
 
 console.log("\n2. sidebar — nav honesty and ingestion:");
 check("Overview marked active", /nav-i on"[^>]*>[\s\S]{0,500}?Overview/.test(h));
-check("Alerts links to the existing console", h.includes('href="/"'));
+check("Alerts links to the existing console", h.includes('href="/alerts"'));
 for (const item of ["Incidents", "Threat Intel", "Assets", "Reports", "Cases"]) {
   check(`${item} rendered but marked coming soon`,
         new RegExp(`soon"[^>]*disabled[^>]*>[\\s\\S]{0,400}${item}`).test(h)
         || (h.includes(item) && h.includes("coming soon")));
 }
 check("no unbuilt item links anywhere", (h.match(/href="/g) || []).length
-      === (h.match(/href="\/"/g) || []).length + (h.match(/href="#"/g) || []).length);
+      === (h.match(/href="\/alerts/g) || []).length + (h.match(/href="#"/g) || []).length);
 check("upload dropzone present", h.includes("Upload Logs")
       && h.includes("Drag &amp; drop or select files"));
 check("accepted formats listed", h.includes("CSV, JSON, TXT, RAW, HTML"));
@@ -163,7 +163,7 @@ check("attacker status rendered as given", h.includes("Damaging / Stealing"));
 check("attacker status explained as display grouping",
       h.includes("display aid, not a verdict"));
 check("tactic chips in rows", h.includes('class="tac"'));
-check("rows drill into the Alerts console", /<a href="\/" title="Open in the Alerts console">View<\/a>/.test(h));
+check("rows drill into the Alerts console", /<a href="\/alerts\?sel=[^"]*"\s+title="Open in the Alerts console, focused on this finding">View<\/a>/.test(h));
 
 console.log("\n6. AI analyst panel:");
 check("panel present with local framing", h.includes("AI Analyst")
