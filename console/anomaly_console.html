@@ -182,6 +182,60 @@ a:hover{color:var(--color-accent-400)}
 .tagm{font-size:10.5px;padding:2px 8px;border-radius:5px;background:var(--color-neutral-800);color:var(--color-neutral-200);font-family:var(--font-mono)}
 .tag-mitre{background:rgba(121,108,191,.16);color:#b2a7e8;border:1px solid rgba(121,108,191,.35)}
 
+/* — overview strip: severity/ATT&CK/timeline charts. Display only — the numbers
+   come straight from the adapter's counts; nothing here decides anything. — */
+.ovw{padding:var(--space-4) var(--space-6) var(--space-2);flex:none}
+.ovw-h{display:flex;align-items:center;gap:var(--space-3);margin-bottom:var(--space-3)}
+.ovw-h .panel-k{margin:0}
+.ovw-toggle{margin-left:auto;border:0;background:transparent;color:var(--color-neutral-500);
+  cursor:pointer;font:inherit;font-size:11.5px}
+.ovw-toggle:hover{color:var(--color-accent)}
+.ovw-grid{display:flex;gap:var(--space-4);flex-wrap:wrap}
+.ovw-grid>.panel{flex:1;min-width:260px}
+.chart-rows{display:flex;flex-direction:column;gap:var(--space-2)}
+.chart-row{display:flex;align-items:center;gap:var(--space-3);font-size:11px;font-family:var(--font-mono)}
+.chart-row .lbl{flex:none;width:150px;color:var(--color-neutral-400);overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.chart-row svg{flex:1;height:14px;display:block}
+.chart-row b{flex:none;min-width:34px;text-align:right;font-weight:500;color:var(--color-text);
+  font-variant-numeric:tabular-nums}
+.chart-time svg{width:100%;height:96px;display:block}
+.chart-axis{display:flex;justify-content:space-between;font-size:10px;
+  font-family:var(--font-mono);color:var(--color-neutral-600);margin-top:2px}
+.chart-note{font-size:10.5px;color:var(--color-neutral-600);margin-top:var(--space-2)}
+
+/* — criticality bands: the primary segmentation of the run. Grouping is display
+   only; a band never changes what a rule decided. — */
+.band{border-radius:var(--radius-md);overflow:hidden;box-shadow:inset 0 0 0 1px rgba(233,233,237,.08)}
+.band-h{display:flex;align-items:center;gap:var(--space-3);width:100%;padding:var(--space-3) var(--space-4);
+  border:0;background:rgba(35,37,50,.55);color:var(--color-text);cursor:pointer;font:inherit;text-align:left}
+.band-h:hover{background:rgba(35,37,50,.85)}
+.band-dot{width:8px;height:8px;border-radius:2px;flex:none}
+.band-name{font-size:11px;letter-spacing:.1em;text-transform:uppercase;font-weight:500}
+.band-counts{font-size:11px;color:var(--color-neutral-500);font-family:var(--font-mono)}
+.band-chev{margin-left:auto;font-size:10px;color:var(--color-neutral-600)}
+.band-body{display:flex;flex-direction:column;gap:var(--space-2);padding:var(--space-2)}
+.band-zero .band-h{cursor:default;color:var(--color-neutral-600)}
+.band-zero .band-name{color:var(--color-neutral-600)}
+
+/* — compact plain-event rows inside a band; detail lives in a dropdown — */
+.evt{border-radius:6px;background:rgba(35,37,50,.30);overflow:hidden}
+.evt-line{display:flex;align-items:baseline;gap:var(--space-3);width:100%;padding:5px var(--space-3);
+  border:0;background:transparent;color:var(--color-text);cursor:pointer;font:inherit;text-align:left;
+  font-family:var(--font-mono);font-size:11px}
+.evt-line:hover{background:rgba(233,233,237,.05)}
+.evt-n{color:var(--color-neutral-700);flex:none;width:38px;text-align:right}
+.evt-ts{color:var(--color-neutral-500);flex:none}
+.evt-host{color:var(--color-neutral-400);flex:none;max-width:120px;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.evt-msg{color:var(--color-neutral-200);flex:1;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap}
+.evt-detail{padding:var(--space-2) var(--space-4) var(--space-3);font-size:11px;
+  font-family:var(--font-mono);color:var(--color-neutral-400)}
+.evt-detail k{color:var(--color-neutral-600)}
+.evt-raw{margin-top:var(--space-2);padding:var(--space-2) var(--space-3);border-radius:5px;
+  background:#12141f;color:var(--color-neutral-300, #b2b6ca);white-space:pre-wrap;word-break:break-word}
+
 .empty{margin-top:56px;text-align:center;padding:0 var(--space-8)}
 .empty-mark{width:44px;height:44px;margin:0 auto var(--space-6);border-radius:50%;border:1px solid var(--color-neutral-800);display:flex;align-items:center;justify-content:center;color:var(--ok);font-size:18px}
 .empty-t{font-size:17px;font-weight:500;margin-bottom:var(--space-2)}
@@ -347,6 +401,18 @@ const SEV = {
   CRITICAL: "#e2807f", HIGH: "#d8a35e", MEDIUM: "#dcb64a", LOW: "#9397ab", NONE: "#75798c"
 };
 
+/* Criticality bands, most alarming first. The order is fixed — it is the page's
+   spine — and the colors are the severity ramp above so bands, cards and charts
+   all agree. Color is never the only encoding: every band and chart row carries
+   its name and count as text (the HIGH/MEDIUM hues are close under CVD). */
+const BUCKETS = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "INFO", "UNKNOWN"];
+const BUCKET_COLOR = {
+  CRITICAL: SEV.CRITICAL, HIGH: SEV.HIGH, MEDIUM: SEV.MEDIUM,
+  LOW: SEV.LOW, INFO: SEV.NONE, UNKNOWN: "#595d6c",
+};
+// The clean default: only the alarming bands start open.
+const BAND_DEFAULT_OPEN = { CRITICAL: true, HIGH: true };
+
 /* Fixture data, carried over from the design. Section 6 of the README notes
    what a real report.json does and does not yet supply for these fields. */
 const FINDINGS = [
@@ -507,6 +573,9 @@ const state = {
   filter: "all",         // all | dis | llm | open
   selId: null,
   checked: [],
+  bands: {},             // per-band expand overrides; BAND_DEFAULT_OPEN otherwise
+  openEvents: [],        // plain events whose detail dropdown is open (by line n)
+  overview: true,        // the charts strip starts visible; it is the summary
   marks: {},
   copied: false,
   manifest: false,
@@ -561,6 +630,144 @@ const esc = (s) => String(s == null ? "" : s)
   .replace(/"/g, "&quot;");
 
 // --------------------------------------------------------------------------
+// Criticality segmentation + overview charts (display only — every number is
+// the adapter's, and nothing here changes a severity, a verdict, or an order)
+// --------------------------------------------------------------------------
+
+/* Band mode needs the new contract keys; an older saved run (or export) without
+   them falls back to the flat finding list it was saved with. */
+const hasSegmentation = () =>
+  Array.isArray(DATA.events) || DATA.severityCounts != null;
+
+const bandOpen = (b) =>
+  state.bands[b] !== undefined ? state.bands[b] : !!BAND_DEFAULT_OPEN[b];
+
+const bucketOfFinding = (f) => (BUCKETS.includes(f.sev) ? f.sev : "UNKNOWN");
+
+/* Plain (non-finding) events per band. Finding lines are not repeated here —
+   they already render as their finding's card at the top of the band. */
+function plainEventsByBucket() {
+  const by = {};
+  BUCKETS.forEach((b) => { by[b] = []; });
+  (DATA.events || []).forEach((ev) => {
+    if (ev.isFinding) return;
+    (by[BUCKETS.includes(ev.bucket) ? ev.bucket : "UNKNOWN"]).push(ev);
+  });
+  return by;
+}
+
+const fmtTs = (ts) => (ts ? String(ts).slice(11, 19) || String(ts) : "—");
+
+/* One labeled proportional bar. SVG mark; identity and value live in HTML text
+   beside it, so color is never the only encoding. */
+function chartRow(cls, label, count, max, color, title) {
+  const w = max > 0 ? Math.max(count > 0 ? 1.5 : 0, (count / max) * 100) : 0;
+  return `
+  <div class="chart-row">
+    <span class="lbl" title="${esc(title || label)}">${esc(label)}</span>
+    <svg class="${cls}" viewBox="0 0 100 14" preserveAspectRatio="none" role="img"
+         aria-label="${esc(label)}: ${count}"><title>${esc(label)} — ${count}</title>
+      <rect x="0" y="3" width="${w.toFixed(1)}" height="8" rx="1.5" fill="${color}"></rect>
+    </svg>
+    <b>${count.toLocaleString()}</b>
+  </div>`;
+}
+
+function severityChart() {
+  const counts = DATA.severityCounts || {};
+  const max = Math.max(1, ...BUCKETS.map((b) => counts[b] || 0));
+  return `
+  <div class="panel">
+    <div class="panel-k">Severity distribution · ${(DATA.linesParsed || 0).toLocaleString()} parsed events</div>
+    <div class="chart-rows">
+      ${BUCKETS.map((b) => chartRow("chart-sev", b, counts[b] || 0, max, BUCKET_COLOR[b])).join("")}
+    </div>
+  </div>`;
+}
+
+/* Ranked ATT&CK techniques. Single accent hue — magnitude is the bar length,
+   identity is the row label. Empty data renders nothing: never invented. */
+function attackPanel() {
+  const freq = DATA.mitreFrequency || [];
+  if (!freq.length) return "";
+  const max = Math.max(1, ...freq.map((t) => t.count || 0));
+  return `
+  <div class="panel" id="atk-panel">
+    <div class="panel-k">Top ATT&amp;CK techniques · derived tags, not verdicts</div>
+    <div class="chart-rows">
+      ${freq.map((t) => {
+        const label = `${t.id} · ${t.name} · ${t.tactic}`;
+        return chartRow("chart-atk", `${t.id} · ${t.name}`, t.count || 0, max,
+                        "var(--color-accent-500)", label)
+          .replace('<span class="lbl"', `<span class="lbl" data-atk="${esc(t.id)}"`);
+      }).join("")}
+    </div>
+    <div class="chart-note">${freq.map((t) =>
+      `${esc(t.id)} · ${esc(t.name)} · ${esc(t.tactic)} — ${t.count}`).join("&ensp;·&ensp; ")}</div>
+  </div>`;
+}
+
+/* Events over time: a single-hue histogram binned across the run window.
+   Events without a timestamp cannot be placed and are counted in a note
+   instead of being dropped silently. */
+function timelineChart() {
+  const stamps = (DATA.events || []).map((e) => e.ts && Date.parse(e.ts))
+    .filter((t) => Number.isFinite(t));
+  const missing = (DATA.events || []).length - stamps.length;
+  if (stamps.length < 2) return "";
+  const lo = Math.min(...stamps), hi = Math.max(...stamps);
+  const BINS = 24, span = Math.max(1, hi - lo);
+  const bins = new Array(BINS).fill(0);
+  stamps.forEach((t) => {
+    bins[Math.min(BINS - 1, Math.floor(((t - lo) / span) * BINS))] += 1;
+  });
+  const maxBin = Math.max(...bins);
+  const W = 560, H = 84, bw = W / BINS;
+  const bars = bins.map((c, i) => {
+    const h = maxBin ? Math.max(c > 0 ? 2 : 0, (c / maxBin) * (H - 4)) : 0;
+    const t0 = new Date(lo + (span / BINS) * i).toISOString().slice(11, 16);
+    return `<rect x="${(i * bw + 1).toFixed(1)}" y="${(H - h).toFixed(1)}"
+      width="${(bw - 2).toFixed(1)}" height="${h.toFixed(1)}" rx="1.5"
+      fill="#9397ab"><title>${t0} UTC — ${c} event(s)</title></rect>`;
+  }).join("");
+  const fmt = (t) => new Date(t).toISOString().slice(11, 16) + " UTC";
+  return `
+  <div class="panel chart-time">
+    <div class="panel-k">Events over time · peak bin ${maxBin.toLocaleString()}</div>
+    <svg class="chart-timeline" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"
+         role="img" aria-label="event count over time">${bars}</svg>
+    <div class="chart-axis"><span>${fmt(lo)}</span><span>${fmt(hi)}</span></div>
+    ${missing > 0 ? `<div class="chart-note">${missing.toLocaleString()} event(s) have no
+      timestamp and are not plotted.</div>` : ""}
+  </div>`;
+}
+
+/* The overview strip. Absent entirely when nothing was parsed — an unrecognized
+   or empty input keeps its honest banner and gets NO charts. */
+function overview() {
+  if (!hasSegmentation()) return "";
+  if (isUnrecognized() || isEmptyInput()) return "";
+  if (!state.overview) {
+    return `<div class="ovw"><div class="ovw-h">
+      <div class="panel-k">Overview</div>
+      <button class="ovw-toggle" data-act="overview">show charts ▸</button>
+    </div></div>`;
+  }
+  return `
+  <div class="ovw">
+    <div class="ovw-h">
+      <div class="panel-k">Overview · display only — severities come from the rules</div>
+      <button class="ovw-toggle" data-act="overview">hide charts ▾</button>
+    </div>
+    <div class="ovw-grid">
+      ${severityChart()}
+      ${attackPanel()}
+      ${timelineChart()}
+    </div>
+  </div>`;
+}
+
+// --------------------------------------------------------------------------
 // Render
 // --------------------------------------------------------------------------
 /* The app has three screens: pick a log, wait for it, review it. */
@@ -584,6 +791,7 @@ function render() {
     // that parsed nothing but still listed model output read as coverage it never had.
     (isUnrecognized() || isEmptyInput()) ? unrecognizedBanner() : "",
     isPartial() ? partialWarning() : "",
+    overview(),
     `<div class="body">${listPane(list, cur, disagree.length)}${detailPane(cur)}</div>`,
     footer()
   ].join("");
@@ -900,9 +1108,9 @@ function listPane(list, cur, disagreeCount) {
        </div>`
     : "";
 
-  const rows = list.length
-    ? list.map((x) => row(x, cur)).join("")
-    : emptyList();
+  const rows = hasSegmentation() && !(isUnrecognized() || isEmptyInput())
+    ? bandedRows(list, cur)
+    : (list.length ? list.map((x) => row(x, cur)).join("") : emptyList());
 
   return `
   <section class="list-pane">
@@ -916,6 +1124,62 @@ function listPane(list, cur, disagreeCount) {
     ${bulk}
     <div class="rows">${rows}</div>
   </section>`;
+}
+
+/* The banded list: one collapsible section per criticality, most alarming
+   first. Findings keep their full card at the top of their band; plain events
+   are one compact line each, raw detail behind a dropdown. Grouping is display
+   only — a band never promotes an INFO line into a threat. */
+function bandedRows(list, cur) {
+  const evs = plainEventsByBucket();
+  const noFindings = !list.length && !all().length;
+  return BUCKETS.map((b) => {
+    const findings = list.filter((x) => bucketOfFinding(x) === b);
+    const events = evs[b];
+    const counts = DATA.severityCounts || {};
+    const total = counts[b] != null ? counts[b] : events.length;
+    const zero = !findings.length && !events.length;
+    // A filter is an explicit "show me these": a band holding a match opens even
+    // if it is collapsed by default, so a filter can never point at nothing.
+    const open = !zero && (bandOpen(b)
+      || (state.filter !== "all" && findings.length > 0));
+    const label = `${findings.length} finding(s) · ${total.toLocaleString()} event(s)`;
+    return `
+    <section class="band${zero ? " band-zero" : ""}" data-bucket="${b}">
+      <button class="band-h" data-band="${b}" ${zero ? "disabled" : ""}
+              aria-expanded="${open}">
+        <span class="band-dot" style="background:${BUCKET_COLOR[b]}"></span>
+        <span class="band-name" style="color:${zero ? "" : BUCKET_COLOR[b]}">${b}</span>
+        <span class="band-counts">${label}</span>
+        <span class="band-chev">${zero ? "" : open ? "▾ collapse" : "▸ expand"}</span>
+      </button>
+      ${open ? `<div class="band-body">
+        ${findings.map((x) => row(x, cur)).join("")}
+        ${events.map(eventRow).join("")}
+      </div>` : ""}
+    </section>`;
+  }).join("") + (noFindings ? emptyList() : "");
+}
+
+/* One plain event: a compact scannable line; everything else — the verbatim raw
+   line, host, timestamp, level — waits in the dropdown until asked for. */
+function eventRow(ev) {
+  const open = state.openEvents.includes(ev.n);
+  return `
+  <div class="evt">
+    <button class="evt-line" data-ev="${ev.n}" aria-expanded="${open}">
+      <span class="evt-n">${esc(ev.n)}</span>
+      <span class="evt-ts">${esc(fmtTs(ev.ts))}</span>
+      <span class="evt-host">${esc(ev.host || "—")}</span>
+      <span class="evt-msg">${esc(ev.msg || "")}</span>
+      <span class="band-chev">${open ? "▾" : "▸"}</span>
+    </button>
+    ${open ? `<div class="evt-detail">
+      <span><k>line</k> ${esc(ev.n)}</span> · <span><k>ts</k> ${esc(ev.ts || "—")}</span> ·
+      <span><k>level</k> ${esc(ev.level || "—")}</span> · <span><k>host</k> ${esc(ev.host || "—")}</span>
+      <div class="evt-raw">${esc(ev.raw)}</div>
+    </div>` : ""}
+  </div>`;
 }
 
 function row(f, cur) {
@@ -1325,6 +1589,9 @@ function mark(id, v) {
 function adoptMarks() {
   state.marks = Object.assign({}, (DATA && DATA.marks) || {});
   state.checked = [];
+  // Band and dropdown state belongs to a run, not the page.
+  state.bands = {};
+  state.openEvents = [];
 }
 
 function copyEvidence() {
@@ -1500,6 +1767,20 @@ document.addEventListener("click", (e) => {
   const filter = t.closest("[data-filter]");
   if (filter) { setState({ filter: filter.dataset.filter }); return; }
 
+  const band = t.closest("[data-band]");
+  if (band) {
+    const b = band.dataset.band;
+    return setState({ bands: Object.assign({}, state.bands, { [b]: !bandOpen(b) }) });
+  }
+
+  const evt = t.closest("[data-ev]");
+  if (evt) {
+    const n = Number(evt.dataset.ev);
+    return setState({ openEvents: state.openEvents.includes(n)
+      ? state.openEvents.filter((x) => x !== n)
+      : state.openEvents.concat(n) });
+  }
+
   const act = t.closest("[data-act]");
   if (act) {
     switch (act.dataset.act) {
@@ -1524,6 +1805,7 @@ document.addEventListener("click", (e) => {
                        state.urlValue.trim(), false);
       }
       case "manifest": return setState({ manifest: !state.manifest });
+      case "overview": return setState({ overview: !state.overview });
       case "print": return window.print();
       case "copy": return copyEvidence();
       case "tp": { const d = current(); return d && mark(d.id, "tp"); }
