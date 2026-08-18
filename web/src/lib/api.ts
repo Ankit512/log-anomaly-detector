@@ -71,6 +71,23 @@ export interface ConsoleState {
   findings: Finding[];
   manifest?: { detector_sha256?: string | null; ruleset?: string | null } & Record<string, unknown>;
   sourceLabel?: string;
+  /** Set when the model endpoint was down: the run is rules-only (verdicts
+   *  complete, advisory explanations skipped) and this says so. */
+  llmNote?: string | null;
+}
+
+/** /api/progress — the running analysis job, polled after POST /api/analyze. */
+export interface AnalyzeJob {
+  status: "idle" | "running" | "done" | "error";
+  phase?: string;
+  done?: number;
+  total?: number;
+  findings?: number;
+  label?: string;
+  error?: string | null;
+  note?: string | null;
+  etaSeconds?: number | null;
+  partialReady?: boolean;
 }
 
 /** /api/metrics — soc.metrics(): every value is derived or null, never guessed.
@@ -85,9 +102,33 @@ export interface Metrics {
   dataSources: number;
 }
 
-export interface RunSummary {
+/** /api/runs — saved runs as navigation entries, newest first, plus which
+ *  one is currently open. */
+export interface RunEntry {
   file: string; runId: string; label: string; generatedAt: string;
   findings: number; unrecognized: boolean; compareRun: boolean; marked?: number;
+}
+
+/** /api/runs-summary — the whole history in one shape. A history file that
+ *  cannot be read appears flagged `unreadable` (never silently dropped); a
+ *  run predating stored severity counts is `dataComplete: false` and
+ *  contributes zeros, never guesses. */
+export interface RunsSummaryEntry {
+  file: string; runId: string;
+  generatedAt?: string; sourceLabel?: string;
+  linesParsed?: number; findingCount?: number;
+  severityCounts?: Record<string, number>;
+  topTechniques?: { id: string; name: string; tactic: string; count: number }[];
+  unrecognized?: boolean; dataComplete?: boolean; unreadable?: boolean;
+}
+
+export interface RunsSummary {
+  runs: RunsSummaryEntry[];
+  totals: {
+    runCount: number; linesParsed: number; findingCount: number;
+    severityCounts: Record<string, number>;
+    mitreFrequency: { id: string; name: string; tactic: string; count: number }[];
+  };
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -99,8 +140,22 @@ async function getJson<T>(url: string): Promise<T> {
 export const api = {
   overview: () => getJson<OverviewResponse>("/api/overview"),
   consoleState: () => getJson<ConsoleState>(`/console_state.json?t=${Date.now()}`),
-  runsSummary: () => getJson<{ runs: RunSummary[] }>("/api/runs-summary"),
+  runs: () => getJson<{ runs: RunEntry[]; current?: string | null }>("/api/runs"),
+  runsSummary: () => getJson<RunsSummary>("/api/runs-summary"),
   metrics: () => getJson<Metrics>("/api/metrics"),
+  progress: () => getJson<AnalyzeJob>("/api/progress"),
+
+  /** Load a saved run back into the dashboard (POST /api/open). */
+  openRun: async (file: string): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch("/api/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ file }),
+    });
+    if (res.ok) return { ok: true };
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
 
   ask: async (question: string): Promise<{ answer?: string; error?: string }> => {
     const res = await fetch("/api/ask", {

@@ -237,7 +237,7 @@ const MOCK = {
       name: "Error-rate spike — 7 error-level events in 60s",
       source: "samples/Linux_2k.log" },
   ],
-  ingestion: { acceptedLabel: "CSV, JSON, TXT, RAW, HTML",
+  ingestion: { acceptedLabel: "LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text",
                files: [{ name: "Linux_2k.log", ok: true }] },
   model: "llama3.1:8b",
 };
@@ -304,7 +304,7 @@ function sidebar() {
       <div class="dropzone" id="dropzone" data-act="browse">
         <b>Upload Logs</b>
         Drag &amp; drop or select files
-        <span>Accepted: ${esc(ing.acceptedLabel || "CSV, JSON, TXT, RAW, HTML")}</span>
+        <span>Accepted: ${esc(ing.acceptedLabel || "LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text")}</span>
       </div>
       <input type="file" id="ingestFile" multiple style="display:none">
       <button class="btn" data-act="browse">Browse Files</button>
