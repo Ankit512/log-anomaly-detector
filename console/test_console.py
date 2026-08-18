@@ -112,6 +112,52 @@ LIVE_STATE = {
     ],
 }
 
+# --- Dashboard-redesign contract keys (shared with feat/dashboard-data) -------
+# events: every parsed record with a display bucket; severityCounts sums to
+# linesParsed; mitreFrequency is ranked descending. Hand-written like the rest
+# of LIVE_STATE — the INFO filler lines are generated to keep this readable.
+LIVE_STATE["linesParsed"] = 19
+LIVE_STATE["linesUnparsed"] = 0
+
+
+def _ev(n, ts, level, host, msg, bucket, isFinding=False, findingId=None):
+    raw = f"{ts} {level or ''} {host} {msg}".strip()
+    return {"n": n, "ts": ts, "level": level, "host": host, "msg": msg,
+            "raw": raw, "bucket": bucket, "isFinding": isFinding, "findingId": findingId}
+
+
+LIVE_STATE["events"] = [
+    _ev(1, "2026-08-13T02:14:01Z", "INFO", "server-01", "healthcheck ok #1", "INFO"),
+    _ev(2, "2026-08-13T02:14:05Z", "INFO", "server-01",
+        "request GET /api/status 200 12ms", "INFO"),
+    _ev(3, "2026-08-13T02:15:02Z", "WARN", "server-01",
+        "disk usage at 78% on /var/log", "MEDIUM"),
+    _ev(4, "2026-08-13T02:15:40Z", "NOTICE", "server-02", "config reloaded", "LOW"),
+    _ev(5, "2026-08-13T02:16:52Z", "ERROR", "server-01",
+        "auth success for 'admin' from 203.0.113.44 after failures", "CRITICAL",
+        isFinding=True, findingId="d0"),
+    _ev(6, "2026-08-13T02:17:10Z", "ERROR", "server-02",
+        "TLS handshake failure from 198.51.100.9", "HIGH"),
+] + [
+    _ev(n, f"2026-08-13T02:17:{n + 4:02d}Z", "INFO", "server-02",
+        f"healthcheck ok #{n}", "INFO")
+    for n in [*range(7, 14), 15, 16]         # 9 INFO filler lines; 14 is the finding
+] + [
+    _ev(14, "2026-08-13T02:18:30Z", "CRIT", "server-03",
+        "db connection pool exhausted", "CRITICAL", isFinding=True, findingId="d2"),
+    _ev(17, "2026-08-13T02:18:29Z", "INFO", "server-03", "pool watermark 91%", "INFO"),
+    _ev(18, "2026-08-13T02:19:10Z", "WARN", "firewall-01",
+        "blocked outbound 45.153.160.2:4444", "HIGH", isFinding=True, findingId="d1"),
+    _ev(19, None, None, "—", "###corrupted trailer###", "UNKNOWN"),
+]
+LIVE_STATE["severityCounts"] = {"CRITICAL": 2, "HIGH": 2, "MEDIUM": 1, "LOW": 1,
+                                "INFO": 12, "UNKNOWN": 1}     # == linesParsed (19)
+LIVE_STATE["mitreFrequency"] = [
+    {"id": "T1110", "name": "Brute Force", "tactic": "Credential Access", "count": 4},
+    {"id": "T1571", "name": "Non-Standard Port", "tactic": "Command and Control", "count": 2},
+    {"id": "T1078", "name": "Valid Accounts", "tactic": "Initial Access", "count": 1},
+]
+
 HARNESS = r"""
 const fs = require("fs"), vm = require("vm");
 const js = fs.readFileSync(process.argv[2], "utf8");
