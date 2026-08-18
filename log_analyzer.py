@@ -592,8 +592,14 @@ def preflight(base_url, api_key, model):
 
 
 def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
-        base_url: str, api_key: str, compare: bool = False, deep_scan: bool = False):
-    preflight(base_url, api_key, model)
+        base_url: str, api_key: str, compare: bool = False, deep_scan: bool = False,
+        rules_only: bool = False):
+    # rules_only is a COMPUTE switch, not an analysis switch: the deterministic
+    # pass below runs identically; only the model calls (and their preflight)
+    # are skipped. The console uses it when explanations are produced later
+    # through its gated remote path, so no log text leaves during the run.
+    if not rules_only:
+        preflight(base_url, api_key, model)
 
     path = Path(input_path)
     if not path.exists():
@@ -634,7 +640,7 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
           + (f" ({collapsed} duplicate(s) collapsed)" if collapsed else ""))
     ctx = to_llm_context(anomalies)
 
-    run_model = should_run_model(stats)
+    run_model = should_run_model(stats) and not rules_only
     all_chunks = list(chunk_log_file(path, lines_per_chunk)) if run_model else []
 
     llm_findings = []
@@ -679,10 +685,14 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         deferred = []
 
     if not run_model:
-        print(f"Skipping the model: 0 of {stats['total_lines']} line(s) parsed, so no rule "
-              f"evaluated anything.")
-        print("  Analyzing unparseable text would be guesswork with nothing to check it "
-              "against — reporting 'format not recognized' instead.")
+        if rules_only:
+            print("Skipping the model: --rules-only. Rules, severities and correlation are "
+                  "complete and local; explanations are produced later, on demand.")
+        else:
+            print(f"Skipping the model: 0 of {stats['total_lines']} line(s) parsed, so no rule "
+                  f"evaluated anything.")
+            print("  Analyzing unparseable text would be guesswork with nothing to check it "
+                  "against — reporting 'format not recognized' instead.")
     else:
         print(f"Loaded {path.name} — {len(all_chunks)} chunk(s) of ~{lines_per_chunk} lines each")
         print(f"Model: {model} (via {base_url})")
@@ -992,6 +1002,10 @@ if __name__ == "__main__":
                         help="Also run an unprimed LLM-alone pass and record what the model "
                              "would have rated each finding without the rules. Doubles "
                              "inference cost; never changes an authoritative severity.")
+    parser.add_argument("--rules-only", action="store_true",
+                        help="Deterministic pass only: rules, severities and correlation, "
+                             "no model calls at all. Used by the console when explanations "
+                             "run on a remote compute node through its redaction gate.")
     parser.add_argument("--deep-scan", action="store_true",
                         help="Ask the model about every chunk, not just those with a "
                              "rule finding. Finds sub-threshold notes anywhere in the "
@@ -999,4 +1013,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY,
-        compare=args.compare, deep_scan=args.deep_scan)
+        compare=args.compare, deep_scan=args.deep_scan, rules_only=args.rules_only)

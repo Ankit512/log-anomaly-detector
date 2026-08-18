@@ -917,6 +917,141 @@ def check_log360():
     return 0 if all(results) else 1
 
 
+def check_remote_compute():
+    """Remote-compute guardrails, with the outbound payload CAPTURED, not sent.
+
+    The four assertions that matter: the raw log is never transmitted; only
+    redacted finding-lines go out; the banner reports the real host and count;
+    and local mode is byte-for-byte today's behaviour. No sockets, no network —
+    la.chat_completion is stubbed and every prompt it would have sent is
+    inspected instead.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import serve
+    import redact
+    import log_analyzer as la
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nremote compute — redaction choke point and honest banner:")
+
+    log_lines = [
+        "2026-08-13T02:16:44Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:16:45Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:16:46Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:16:47Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:16:48Z ERROR server-01 auth failed for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:16:52Z INFO server-01 auth success for user 'admin' from 203.0.113.44",
+        "2026-08-13T02:17:00Z INFO server-09 SECRET-MARKER-LINE routine heartbeat",
+    ]
+    finding = {
+        "id": "d0", "sev": "CRITICAL", "type": "auth_bruteforce_success",
+        "title": "Brute-force then SUCCESSFUL login for 'admin' from 203.0.113.44",
+        "host": "server-01", "hostDerived": True,
+        "timeline": [{"line": n} for n in range(1, 7)],
+    }
+
+    captured = []
+
+    def fake_chat(base_url, api_key, model, system, user, timeout=300):
+        captured.append({"base_url": base_url, "api_key": api_key,
+                         "model": model, "user": user})
+        return json.dumps({"findings": [], "explanations": [
+            {"rule_id": "auth_bruteforce_success", "explanation": "advisory prose"}]})
+
+    real_chat = la.chat_completion
+    la.chat_completion = fake_chat
+    try:
+        with tempfile.TemporaryDirectory(prefix="remote-test-") as tmp:
+            log_path = Path(tmp) / "attack.log"
+            log_path.write_text("\n".join(log_lines) + "\n")
+            state = {"logPath": str(log_path), "findings": [finding]}
+
+            # --- remote mode: everything outbound goes through the choke point
+            serve.set_compute({"mode": "remote",
+                               "baseUrl": "https://gpu-node.internal:8443/v1",
+                               "apiKey": "sk-secret", "model": "big-model"})
+            text, sent = serve.explain_finding(finding, state)
+            payload = captured[-1]["user"]
+
+            check("explanation text returned", text == "advisory prose", text[:60])
+            check("sent = the finding's own lines, nothing more", sent == 6, str(sent))
+            check("payload goes to the configured remote node",
+                  captured[-1]["base_url"] == "https://gpu-node.internal:8443/v1"
+                  and captured[-1]["model"] == "big-model"
+                  and captured[-1]["api_key"] == "sk-secret")
+
+            check("raw log NEVER transmitted: non-finding line absent",
+                  "SECRET-MARKER-LINE" not in payload)
+            check("raw log NEVER transmitted: no finding line appears verbatim",
+                  all(line not in payload for line in log_lines))
+            check("IPs masked in outbound text", "203.0.113.44" not in payload)
+            check("usernames masked in outbound text", "admin" not in payload)
+            check("hostnames masked in outbound text", "server-01" not in payload)
+            check("deterministic placeholders present",
+                  "[IP-1]" in payload and "[USER-1]" in payload and "[HOST-1]" in payload)
+            check("pre-flagged context is redacted too (title carried IP + user)",
+                  "203.0.113.44" not in payload.split("Analyze this log chunk")[0])
+
+            # --- the honest banner reflects host + actual count
+            c = serve.compute_state(sent)
+            check("banner names the remote host", c["host"] == "gpu-node.internal",
+                  str(c.get("host")))
+            check("banner reports the real line count",
+                  c["banner"] == "Compute runs on gpu-node.internal. 6 finding-lines "
+                                 "sent (redacted). Raw log stays on this machine.",
+                  c["banner"])
+            check("banner grammar: 1 line is singular",
+                  "1 finding-line sent" in serve.compute_state(1)["banner"])
+            check("masked config never exposes the key",
+                  "sk-secret" not in json.dumps(serve.masked_compute())
+                  and serve.masked_compute()["hasKey"] is True)
+
+            # --- config validation: a bad remote URL is refused, not deferred
+            for bad in ("ftp://host/v1", "not-a-url", ""):
+                try:
+                    serve.set_compute({"mode": "remote", "baseUrl": bad})
+                    check(f"rejects remote URL {bad!r}", False, "it was accepted")
+                except ValueError:
+                    check(f"rejects remote URL {bad!r}", True)
+
+            # --- local mode: today's path, unchanged
+            serve.set_compute({"mode": "local"})
+            captured.clear()
+            text, sent = serve.explain_finding(finding, state)
+            payload = captured[-1]["user"]
+            chunk_text = "".join(line + "\n" for line in log_lines)
+
+            check("local mode sends 0 lines off-machine (count stays 0)", sent == 0)
+            check("local mode uses the machine-local endpoint",
+                  captured[-1]["base_url"] == la.LLM_BASE_URL
+                  and captured[-1]["model"] == la.LLM_MODEL)
+            check("local prompt is the verbatim 25-line chunk, exactly as before",
+                  chunk_text in payload)
+            check("local banner state says remote is off",
+                  serve.compute_state(0) == {"remote": False})
+
+            # --- the redaction pass itself (also the sanitize point)
+            r = redact.redact_text("Failed password for invalid user root from 10.0.0.1")
+            check("sshd-style username masked", "root" not in r and "[USER-1]" in r, r)
+            r = redact.redact_text("conn from 10.0.0.1 then 10.0.0.1 again then 10.0.0.2")
+            check("same value -> same placeholder", r.count("[IP-1]") == 2 and "[IP-2]" in r, r)
+            r = redact.redact_text("evil\x1b[31mred\x00null")
+            check("control characters stripped (untrusted input)",
+                  "\x1b" not in r and "\x00" not in r, repr(r))
+    finally:
+        la.chat_completion = real_chat
+        serve.set_compute({"mode": "local"})
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -954,10 +1089,11 @@ def main():
 
     routing = check_server_routing()
     log360 = check_log360()
-    if result.returncode or routing or log360:
+    remote = check_remote_compute()
+    if result.returncode or routing or log360 or remote:
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing + log360 checks green")
+    print("\nPASSED — render + routing + log360 + remote-compute checks green")
     return 0
 
 

@@ -52,6 +52,7 @@ sys.path.insert(0, str(HERE))
 
 import adapter  # noqa: E402
 import export  # noqa: E402
+import redact  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 
@@ -127,6 +128,55 @@ SUGGESTED_URLS = [
 
 # Mutable app state: what the console is currently showing.
 STATE = {"idle": True}
+
+# Where explanations COMPUTE. Rules, severity, correlation and the honest
+# surfaces always run locally regardless of this setting; a remote node only
+# ever receives redacted finding-lines (through console/redact.py, the single
+# outbound choke point) and only returns advisory prose — never a verdict.
+COMPUTE = {"mode": "local"}
+
+
+def compute_state(sent_lines=0):
+    """The console-facing compute descriptor, including the honest banner."""
+    if COMPUTE.get("mode") != "remote":
+        return {"remote": False}
+    host = (urllib.parse.urlparse(COMPUTE.get("baseUrl", "")).hostname
+            or COMPUTE.get("baseUrl", ""))
+    plural = "" if sent_lines == 1 else "s"
+    return {
+        "remote": True, "host": host, "sentLines": sent_lines,
+        "banner": (f"Compute runs on {host}. {sent_lines} finding-line{plural} sent "
+                   "(redacted). Raw log stays on this machine."),
+    }
+
+
+def set_compute(payload):
+    """Validate and apply a compute-location change. Returns the masked config."""
+    mode = payload.get("mode")
+    if mode == "local":
+        COMPUTE.clear()
+        COMPUTE["mode"] = "local"
+    elif mode == "remote":
+        base = (payload.get("baseUrl") or "").strip().rstrip("/")
+        parsed = urllib.parse.urlparse(base)
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise ValueError("remote base URL must look like http(s)://host[:port]/v1")
+        COMPUTE.clear()
+        COMPUTE.update(mode="remote", baseUrl=base,
+                       apiKey=(payload.get("apiKey") or "").strip(),
+                       model=(payload.get("model") or "").strip())
+    else:
+        raise ValueError("compute mode must be 'local' or 'remote'")
+    return masked_compute()
+
+
+def masked_compute():
+    """The config as the browser may see it — never the key itself."""
+    out = {"mode": COMPUTE.get("mode", "local")}
+    if out["mode"] == "remote":
+        out.update(baseUrl=COMPUTE.get("baseUrl", ""), model=COMPUTE.get("model", ""),
+                   hasKey=bool(COMPUTE.get("apiKey")))
+    return out
 
 # The analyzer can run for minutes. It runs on a worker thread and reports
 # progress here, so /api/analyze returns immediately and the browser can show
@@ -398,6 +448,9 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
             STATE if STATE.get("logPath") == str(log_path) else None, state)
         state["idle"] = False
         state["partial"] = partial
+        # A fresh run has sent nothing anywhere yet; the counter grows only when
+        # the gated on-demand path actually transmits redacted finding-lines.
+        state["compute"] = compute_state(0)
         state["logPath"] = str(log_path)
         state["sourceKind"] = source
         state["sourceLabel"] = (value if source in ("sample", "url")
@@ -431,11 +484,68 @@ def analyze(source, value, compare, filename=None, data=None, threat_intel=None)
                 pass
 
     set_job(phase="rules")
-    run_analyzer(log_path, compare, work / "run", on_progress=on_progress)
+    # Remote compute: the analyzer run is rules-only, so not one byte of log
+    # text leaves during analysis. Explanations happen later, on demand, and
+    # only through the redaction choke point in explain_finding().
+    extra = ("--rules-only",) if COMPUTE.get("mode") == "remote" else ()
+    run_analyzer(log_path, compare, work / "run", extra_args=extra,
+                 on_progress=on_progress)
     state = publish(json.loads(report_path.read_text()), partial=False)
     save_run(state)
     print(f"  serving run id : {state['runId']}", flush=True)
     return state
+
+
+def explain_finding(finding, state, compute=None):
+    """Advisory explanation for ONE finding, wherever compute runs.
+
+    Local mode is today's path, unchanged: the ~25-line chunk around the
+    finding goes to the model on this machine. Remote mode sends ONLY the
+    finding's own lines — never the chunk, never the whole log — and only
+    after console/redact.py has masked IPs, usernames and hostnames. Either
+    way the model's reply is advisory prose; verdicts were computed locally
+    long before this runs.
+
+    Returns (text, sent) where sent counts the redacted finding-lines that
+    actually left this machine (always 0 in local mode).
+    """
+    compute = COMPUTE if compute is None else compute
+    log_path = Path(state.get("logPath", ""))
+    lines = [e.get("line") for e in finding.get("timeline", []) if e.get("line")]
+    if not log_path.exists() or not lines:
+        raise LookupError("cannot locate this finding's source lines")
+
+    ctx = ("Pre-flagged anomalies (from deterministic detectors — treat severities as "
+           "authoritative):\n"
+           f"- [{finding.get('sev')}] {finding.get('type')}: {finding.get('title')}")
+
+    if compute.get("mode") == "remote":
+        # REDACTION CHOKE POINT — the only place outbound text is assembled.
+        all_lines = log_path.read_text(errors="replace").splitlines()
+        wanted = sorted({n for n in lines if 0 < n <= len(all_lines)})
+        hosts = {f.get("host") for f in state.get("findings", []) if f.get("hostDerived")}
+        redacted, _ = redact.redact_lines([all_lines[n - 1] for n in wanted], hosts=hosts)
+        payload = [line + "\n" for line in redacted]
+        result = la.analyze_chunk(compute["baseUrl"], compute.get("apiKey") or "unused",
+                                  compute.get("model") or la.LLM_MODEL,
+                                  payload, 0, redact.redact_text(ctx, hosts=hosts))
+        sent = len(payload)
+    else:
+        size = 25
+        idx = (max(lines) - 1) // size
+        all_lines = log_path.read_text(errors="replace").splitlines(True)
+        chunk = all_lines[idx * size:(idx + 1) * size]
+        result = la.analyze_chunk(la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL,
+                                  chunk, idx, ctx)
+        sent = 0
+
+    text = ""
+    for ex in result.get("explanations", []):
+        if ex.get("explanation") and (not ex.get("rule_id")
+                                      or ex.get("rule_id") == finding.get("type")):
+            text = ex["explanation"]
+            break
+    return text or "The model returned no explanation for this finding.", sent
 
 
 # ---------------------------------------------------------------------------
@@ -484,6 +594,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif path == "/api/runs":
             self._json({"runs": list_runs(), "current": STATE.get("runId")})
+        elif path == "/api/compute":
+            self._json(masked_compute())
         else:
             self.send_error(404, "This server only serves the console, its state, and /api")
 
@@ -502,6 +614,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._explain()
         elif path == "/api/mark":
             self._mark()
+        elif path == "/api/compute":
+            self._set_compute()
         elif path == "/api/reset":
             global STATE, CURRENT_RUN_FILE
             STATE = {"idle": True}
@@ -559,6 +673,22 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # 202: accepted, not finished. The client polls /api/progress.
         return self._json({"status": "running"}, 202)
 
+    def _set_compute(self):
+        """Switch where explanations compute. Never changes what runs locally."""
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            cfg = set_compute(json.loads(self.rfile.read(length) or b"{}"))
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._json({"error": str(e)}, 400)
+        if not STATE.get("idle"):
+            STATE["compute"] = compute_state((STATE.get("compute") or {}).get("sentLines", 0))
+            try:
+                STATE_FILE.write_text(json.dumps(STATE, indent=2))
+            except OSError:
+                pass
+        print(f"  compute: {cfg}", flush=True)
+        return self._json(cfg)
+
     def _open_run(self):
         """Load a saved run back into the dashboard."""
         global STATE
@@ -598,22 +728,10 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         if finding.get("explanation"):
             return self._json(finding)                     # already explained
 
-        log_path = Path(STATE.get("logPath", ""))
-        lines = [e.get("line") for e in finding.get("timeline", []) if e.get("line")]
-        if not log_path.exists() or not lines:
-            return self._json({"error": "cannot locate this finding's source lines"}, 409)
-
-        size = 25
-        idx = (max(lines) - 1) // size
-        all_lines = log_path.read_text(errors="replace").splitlines(True)
-        chunk = all_lines[idx * size:(idx + 1) * size]
-
-        ctx = ("Pre-flagged anomalies (from deterministic detectors — treat severities as "
-               "authoritative):\n"
-               f"- [{finding.get('sev')}] {finding.get('type')}: {finding.get('title')}")
         try:
-            text = la.explain_single(la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL,
-                                     chunk, idx, ctx, rule_id=finding.get("type"))
+            text, sent = explain_finding(finding, STATE)
+        except LookupError:
+            return self._json({"error": "cannot locate this finding's source lines"}, 409)
         except Exception as e:
             return self._json({"error": f"explanation failed: {e}"}, 500)
 
@@ -621,6 +739,12 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             text = "The model returned no explanation for this finding."
         finding["explanation"] = text
         finding["explanationOnDemand"] = True
+        if sent:
+            # Keep the honest banner honest: N is what actually left, cumulatively.
+            prev = (STATE.get("compute") or {}).get("sentLines", 0)
+            STATE["compute"] = compute_state(prev + sent)
+        # persist_state() writes both the live state file AND the reopened run file,
+        # so an on-demand explanation lands in the run (run-history writeback).
         persist_state()
         print(f"  explained on demand: {fid}", flush=True)
         return self._json(finding)
