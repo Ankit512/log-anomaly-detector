@@ -1,58 +1,75 @@
-import { scaleLinear } from "@visx/scale";
-import { sevVar, SEV_ORDER } from "@/lib/severity";
 import type { OverviewData } from "@/lib/api";
+import { SEV_ORDER, sevVar } from "@/lib/severity";
 
-const KEYS = ["low", "medium", "high", "critical"] as const; // bottom -> top
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
-/** Stacked bars per time bin. 2px gaps between segments and bars; every
- *  segment carries a <title> tooltip with its exact count. */
+function dayLabel(iso: string) {
+  const d = new Date(iso);
+  return isNaN(d.getTime()) ? iso.slice(0, 10) : `${String(d.getUTCDate()).padStart(2, "0")} ${MONTHS[d.getUTCMonth()]}`;
+}
+
+/** The v6 time chart: one flex column per hourly bin from the backend, each a
+ *  bottom-up stack of severity segments, over three gridlines. The axis spans
+ *  exactly the run's own bins — no invented empty range. */
 export function AlertsOverTime({ data }: { data: OverviewData["alertsOverTime"] }) {
   const bins = data.bins;
-  if (!bins.length) {
-    return <p className="py-4 text-muted-foreground">No alerts in this window.</p>;
+  if (bins.length === 0) {
+    return <p className="text-xs text-muted-foreground">No timestamped findings in this run.</p>;
   }
-  const W = 320, H = 110;
-  const max = Math.max(1, ...bins.map((b) => KEYS.reduce((s, k) => s + b[k], 0)));
-  const y = scaleLinear({ domain: [0, max], range: [0, H - 6] });
-  const bw = W / bins.length;
+
+  const totals = bins.map((b) => b.critical + b.high + b.medium + b.low);
+  const max = Math.max(...totals, 1);
+  // Columns render CRITICAL-first, so the worst bucket tops the stack; the
+  // legend reads bottom-to-top to match.
+  const legendOrder = [...SEV_ORDER].reverse();
+
+  const labels = [...new Set([0, Math.floor((bins.length - 1) / 2), bins.length - 1])]
+    .map((i) => dayLabel(bins[i].t));
 
   return (
     <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="h-[110px] w-full" preserveAspectRatio="none"
-           role="img" aria-label="alerts over time" data-testid="chart-overtime">
-        {bins.map((b, i) => {
-          let yPos = H;
-          return KEYS.map((k) => {
-            const v = b[k];
-            if (!v) return null;
-            const h = y(v);
-            yPos -= h;
-            return (
-              <rect
-                key={`${b.t}-${k}`}
-                x={(i * bw + 3).toFixed(1)}
-                y={yPos.toFixed(1)}
-                width={(bw - 6).toFixed(1)}
-                height={Math.max(1.5, h - 2).toFixed(1)}
-                rx="1.5"
-                style={{ fill: sevVar(k) }}
+      <div className="flex gap-[9px]">
+        <div className="flex h-[168px] flex-col justify-between text-[11px] tabular-nums text-muted-foreground">
+          <span>{max}</span><span>{Math.round(max / 2)}</span><span>0</span>
+        </div>
+        <div className="relative h-[168px] min-w-0 flex-1">
+          <div className="absolute inset-x-0 top-0 border-t" />
+          <div className="absolute inset-x-0 top-1/2 border-t" />
+          <div className="absolute inset-x-0 bottom-0 border-t" />
+          <div
+            data-testid="chart-overtime" role="img" aria-label="alerts over time"
+            className="absolute inset-0 flex items-end"
+          >
+            {bins.map((b) => (
+              <div
+                key={b.t}
+                title={`${b.t} — ${SEV_ORDER.filter((s) => b[s.toLowerCase() as "low"] > 0)
+                  .map((s) => `${s.toLowerCase()}: ${b[s.toLowerCase() as "low"]}`).join(", ") || "0"}`}
+                className="flex h-full min-w-0 flex-1 flex-col justify-end px-0.5"
               >
-                <title>{`${b.t.slice(11, 16)} — ${k}: ${v}`}</title>
-              </rect>
-            );
-          });
-        })}
-      </svg>
-      <div className="mt-1 flex justify-between font-mono text-[10px] text-muted-foreground">
-        <span>{bins[0].t.slice(11, 16)}</span>
-        <span>peak bin {max}</span>
-        <span>{bins[bins.length - 1].t.slice(11, 16)}</span>
+                {SEV_ORDER.map((sev) => {
+                  const n = b[sev.toLowerCase() as "critical" | "high" | "medium" | "low"];
+                  return n > 0 ? (
+                    <div
+                      key={sev}
+                      className="w-full first:rounded-t-sm"
+                      style={{ height: `${(n / max) * 100}%`, background: sevVar(sev) }}
+                    />
+                  ) : null;
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <div className="mt-2 flex flex-wrap gap-3 text-[11px] text-muted-foreground">
-        {SEV_ORDER.map((s) => (
-          <span key={s} className="flex items-center gap-1.5">
-            <i className="h-2 w-2 rounded-sm" style={{ background: sevVar(s) }} />
-            {s.toLowerCase()}
+      <div className="mt-[7px] flex justify-between pl-5 text-[11.5px] text-muted-foreground">
+        {labels.map((l, i) => <span key={`${l}-${i}`}>{l}</span>)}
+      </div>
+      <div className="mt-3.5 flex flex-wrap justify-center gap-x-[18px] gap-y-1 text-[12.5px] text-muted-foreground">
+        {legendOrder.map((sev) => (
+          <span key={sev} className="flex items-center gap-[7px]">
+            <i className="h-2.5 w-2.5 flex-none rounded-full" style={{ background: sevVar(sev) }} />
+            {sev.charAt(0) + sev.slice(1).toLowerCase()}
           </span>
         ))}
       </div>

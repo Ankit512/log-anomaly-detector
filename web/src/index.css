@@ -32,6 +32,8 @@
     --sev-high: #ea580c;
     --sev-medium: #caa204;
     --sev-low: #166534;
+
+    --shadow: 0 1px 2px rgba(26, 32, 51, 0.06), 0 4px 14px rgba(26, 32, 51, 0.06);
   }
 
   .dark {
@@ -53,6 +55,8 @@
     --sev-high: #cd8036;
     --sev-medium: #827208;
     --sev-low: #3f9f83;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 14px rgba(0, 0, 0, 0.3);
   }
 
   * { @apply border-border; }

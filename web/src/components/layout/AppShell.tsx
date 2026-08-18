@@ -1,26 +1,26 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  LayoutGrid, TriangleAlert, Siren, ShieldHalf, Server, FileText,
-  FolderKanban, Settings, LogOut, RefreshCw, Search,
+  Bell, Calendar, FileText, Filter, Folder, House, LogOut, Monitor,
+  RefreshCw, Settings, Shield, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useUi } from "@/store/ui";
 import { cn } from "@/lib/utils";
 
-/** The uniform shell: every route renders inside this exact frame, so the
- *  sidebar, topbar, and page container are identical across the app. */
+/** The uniform v6 shell: every route renders inside this exact frame, so the
+ *  sidebar, header, and page container are identical across the app. */
 
 export const NAV = [
-  { to: "/", label: "Overview", icon: LayoutGrid, ready: true },
-  { to: "/alerts", label: "Alerts", icon: TriangleAlert, ready: true },
-  { to: "/incidents", label: "Incidents", icon: Siren, ready: false },
-  { to: "/threat-intel", label: "Threat Intel", icon: ShieldHalf, ready: false },
-  { to: "/assets", label: "Assets", icon: Server, ready: false },
+  { to: "/", label: "Overview", icon: House, ready: true },
+  { to: "/alerts", label: "Alerts", icon: Bell, ready: true },
+  { to: "/incidents", label: "Incidents", icon: TriangleAlert, ready: false },
+  { to: "/threat-intel", label: "Threat Intel", icon: Shield, ready: false },
+  { to: "/assets", label: "Assets", icon: Monitor, ready: false },
   { to: "/reports", label: "Reports", icon: FileText, ready: false },
-  { to: "/cases", label: "Cases", icon: FolderKanban, ready: false },
+  { to: "/cases", label: "Cases", icon: Folder, ready: false },
   { to: "/settings", label: "Settings", icon: Settings, ready: false },
 ] as const;
 
@@ -32,100 +32,159 @@ const TITLES: Record<string, string> = {
 
 function Sidebar() {
   return (
-    <aside className="flex w-56 flex-none flex-col gap-1 border-r bg-card p-3">
-      <div className="mb-3 flex items-center gap-2.5 px-2 pt-1">
-        <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary text-[15px] font-bold text-primary-foreground">S</div>
-        <div className="leading-tight">
-          <div className="text-[15px] font-semibold">itsoc</div>
-          <div className="text-[10.5px] text-muted-foreground">security operations</div>
-        </div>
+    <aside className="flex w-[172px] flex-none flex-col border-r bg-card px-3 py-[18px]">
+      <div className="px-2.5 pb-[22px]">
+        <ShieldCheck className="h-[34px] w-[34px] text-primary" strokeWidth={1.8} role="img" aria-label="itsoc" />
       </div>
-      <nav aria-label="Main" className="flex flex-col gap-0.5">
+      <nav aria-label="Main" className="flex flex-col gap-[3px]">
         {NAV.map(({ to, label, icon: Icon, ready }) => (
           <NavLink
             key={to}
             to={to}
             end={to === "/"}
+            title={ready ? undefined : "Not built yet — the page says so honestly"}
             className={({ isActive }) =>
               cn(
-                "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground hover:bg-muted",
-                isActive && "bg-accent font-semibold text-accent-foreground",
+                "flex items-center gap-[11px] rounded-md px-[11px] py-[9px] text-[13.5px] text-muted-foreground hover:bg-background",
+                isActive && "bg-accent font-semibold text-accent-foreground hover:bg-accent",
               )
             }
           >
-            <Icon className="h-4 w-4" aria-hidden />
+            <Icon className="h-[17px] w-[17px] flex-none" strokeWidth={1.8} aria-hidden />
             {label}
-            {!ready && (
-              <span className="ml-auto rounded border px-1 py-px text-[8.5px] uppercase tracking-wide text-muted-foreground">
-                soon
-              </span>
-            )}
           </NavLink>
         ))}
         <button
           disabled
           title="No session system yet — nothing behind this item"
-          className="flex cursor-not-allowed items-center gap-2.5 rounded-md px-2.5 py-2 text-[13px] text-muted-foreground opacity-50"
+          className="mt-8 flex cursor-not-allowed items-center gap-[11px] rounded-md px-[11px] py-[9px] text-left text-[13.5px] text-muted-foreground opacity-55"
         >
-          <LogOut className="h-4 w-4" aria-hidden />
+          <LogOut className="h-[17px] w-[17px] flex-none" strokeWidth={1.8} aria-hidden />
           Logout
-          <span className="ml-auto rounded border px-1 py-px text-[8.5px] uppercase tracking-wide">soon</span>
         </button>
       </nav>
     </aside>
   );
 }
 
-function Topbar() {
-  const { pathname } = useLocation();
-  const timeWindow = useUi((s) => s.timeWindow);
-  const search = useUi((s) => s.search);
-  const setSearch = useUi((s) => s.setSearch);
+/** Header upload: the design's primary action, posting to the real
+ *  /api/analyze compute path. Feedback is honest text, never a fake state. */
+function UploadButton({ onNote }: { onNote: (note: string) => void }) {
   const queryClient = useQueryClient();
 
+  const upload = async (files: FileList | null) => {
+    const file = files?.[0];
+    if (!file) return;
+    onNote(`Uploading ${file.name}…`);
+    const out = await api.analyzeUpload(file).catch(() => ({ ok: false as const, error: "no backend" }));
+    onNote(out.ok
+      ? `Analysis of ${file.name} started — open Alerts to watch progress; Refresh when it lands.`
+      : `The server did not accept ${file.name}${out.error ? `: ${out.error}` : ""}.`);
+    if (out.ok) setTimeout(() => queryClient.invalidateQueries(), 1500);
+  };
+
   return (
-    <header className="flex flex-none flex-wrap items-center gap-3 border-b bg-card/50 px-5 py-3">
+    <label
+      title="Accepted: CSV, JSON, TXT, RAW, HTML — analyzed locally by the rules engine; results open in Alerts"
+      className="inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[10px] border border-primary bg-primary px-[15px] py-2.5 text-[13.5px] font-semibold text-primary-foreground hover:opacity-90"
+    >
+      <Upload className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+      Upload Logs
+      <input
+        type="file" multiple className="hidden" data-testid="ingest-file"
+        aria-label="Upload logs" onChange={(e) => { upload(e.target.files); e.target.value = ""; }}
+      />
+    </label>
+  );
+}
+
+const chip = "inline-flex items-center gap-[9px] whitespace-nowrap rounded-[10px] border bg-card px-3.5 py-2.5 text-[13.5px]";
+
+function Header() {
+  const { pathname } = useLocation();
+  const timeWindow = useUi((s) => s.timeWindow);
+  const queryClient = useQueryClient();
+  const [note, setNote] = useState("");
+
+  return (
+    <div className="flex flex-wrap items-center gap-3">
       <div>
-        <h1 className="text-lg font-semibold leading-tight">{TITLES[pathname] ?? "itsoc"}</h1>
-        <div className="text-xs text-muted-foreground">Security Overview</div>
+        <h1 className="text-[26px] font-bold leading-tight tracking-[-0.015em]">
+          {TITLES[pathname] ?? "itsoc"}
+        </h1>
+        <div className="mt-px text-sm font-medium text-accent-foreground">Security Overview</div>
       </div>
-      <div className="ml-auto flex items-center gap-2">
-        <div className="relative">
-          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" aria-hidden />
-          <Input
-            className="w-52 pl-8"
-            placeholder="Search (coming soon)"
-            aria-label="Global search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            disabled
-            title="Global search needs a backend index — a later phase"
-          />
-        </div>
-        {/* The label is what the backend actually serves: the current run's
-            own window. History-window filtering is a later, honest feature. */}
-        <span className="rounded-md border bg-card px-2.5 py-1.5 text-xs text-muted-foreground" title="Data window">
+      <div className="ml-auto flex flex-wrap items-center gap-2.5">
+        <UploadButton onNote={setNote} />
+        <span
+          className={cn(chip, "text-muted-foreground")}
+          title="The current run's own window. History-window filtering does not exist yet, so this states what is shown rather than offering a choice."
+        >
+          <Calendar className="h-4 w-4" strokeWidth={1.8} aria-hidden />
           {timeWindow}
         </span>
-        <Button variant="outline" size="sm" onClick={() => queryClient.invalidateQueries()}>
-          <RefreshCw className="h-4 w-4" aria-hidden /> Refresh
-        </Button>
+        <button className={cn(chip, "cursor-pointer hover:bg-background")}
+                onClick={() => queryClient.invalidateQueries()}>
+          <RefreshCw className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          Refresh
+        </button>
+        <button disabled title="Filtering is not built yet — alert filters live on the Alerts page"
+                className={cn(chip, "cursor-not-allowed opacity-50")}>
+          <Filter className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+          Filters
+        </button>
         <ThemeToggle />
       </div>
-    </header>
+      {note && <p className="w-full text-xs text-muted-foreground" role="status">{note}</p>}
+    </div>
+  );
+}
+
+/** The run-facts line under the Overview header — every segment is read from
+ *  the adapter state or the overview payload; absent facts are omitted, never
+ *  filled in. Overview-only: Alerts carries its own run banner. */
+function RunFacts() {
+  const { data: state } = useQuery({ queryKey: ["consoleState"], queryFn: api.consoleState });
+  const { data: ov } = useQuery({ queryKey: ["overview"], queryFn: api.overview });
+
+  if (!state || state.idle || !state.findings) return null;
+  const sha = state.manifest?.detector_sha256;
+  const model = ov && !("error" in ov) ? ov.model : null;
+  const meta = [
+    state.runWindow, state.manifest?.ruleset && `ruleset ${state.manifest.ruleset}`,
+    model, state.generatedAt && `generated ${state.generatedAt}`,
+  ].filter(Boolean);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-[18px] gap-y-1.5 text-[11.5px] text-muted-foreground">
+      {state.sourceLabel && (
+        <span title={state.sourceLabel}
+              className="cursor-help border-b border-dotted font-mono text-[12.5px] font-semibold text-foreground">
+          {state.sourceLabel.split("/").pop()}
+        </span>
+      )}
+      {state.runHosts && <span>host {state.runHosts}</span>}
+      {state.runParsed && <span className="tabular-nums">{state.runParsed}</span>}
+      {meta.length > 0 && (
+        <span className="font-mono text-[10.5px]">
+          {meta.map(String).join(" · ")}
+          {sha && <span title={`detector_sha256 ${sha}`}> · detector {sha.slice(0, 8)}…{sha.slice(-6)}</span>}
+        </span>
+      )}
+    </div>
   );
 }
 
 export function AppShell() {
+  const { pathname } = useLocation();
   return (
     <div className="flex min-h-screen">
       <Sidebar />
-      <div className="flex min-w-0 flex-1 flex-col">
-        <Topbar />
-        <main className="min-w-0 flex-1 p-5">
-          <Outlet />
-        </main>
-      </div>
+      <main className="flex min-w-0 flex-1 flex-col gap-4 px-[22px] py-5">
+        <Header />
+        {pathname === "/" && <RunFacts />}
+        <Outlet />
+      </main>
     </div>
   );
 }

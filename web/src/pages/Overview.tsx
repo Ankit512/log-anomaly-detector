@@ -1,41 +1,112 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp } from "lucide-react";
-import { api, type Delta, type OverviewData } from "@/lib/api";
+import {
+  ArrowDown, ArrowUp, Bell, CircleAlert, CircleArrowDown, Database, ExternalLink,
+  Eye, MoreVertical, Monitor, OctagonAlert, Shield, ShieldCheck, Users,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { Link } from "react-router-dom";
+import { api, type Delta, type Metrics, type OverviewData } from "@/lib/api";
 import { sevVar } from "@/lib/severity";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { SeverityDonut } from "@/components/charts/SeverityDonut";
 import { AlertsOverTime } from "@/components/charts/AlertsOverTime";
 import { TacticBars } from "@/components/charts/TacticBars";
 import { AiAnalyst } from "@/components/AiAnalyst";
-import { IngestionPanel } from "@/components/IngestionPanel";
-import { SeverityBadge } from "@/components/ui/badge";
-import { Link } from "react-router-dom";
 import { useUi } from "@/store/ui";
 
-function KpiCard({ label, count, delta, color }:
-  { label: string; count: number; delta: Delta | null; color: string }) {
+/** v6 compact KPI card: icon, colored label, count, and a delta line that is
+ *  either the real prior-run delta or the honest "no prior run — no delta". */
+function KpiCard({ label, count, delta, icon: Icon, color }:
+  { label: string; count: number; delta: Delta | null; icon: LucideIcon; color?: string }) {
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <i className="h-2 w-2 rounded-full" style={{ background: color }} />
-          {label}
-        </div>
-        <div className="mt-0.5 text-[26px] font-semibold tabular-nums">{count.toLocaleString()}</div>
-        {/* A delta renders ONLY when a prior period exists; null means "no
-            honest base to compare against" and shows nothing. Up is worse. */}
-        {delta && (
-          <div className="flex items-center gap-1 text-[11px]"
+    <div className="flex items-center gap-[9px] rounded-[9px] bg-card px-[11px] py-2 shadow-card">
+      <Icon className="h-[18px] w-[18px] flex-none" strokeWidth={1.6} aria-hidden
+            style={{ color: color ?? "hsl(var(--muted-foreground))" }} />
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold" style={color ? { color } : undefined}>{label}</div>
+        <div className="text-lg font-bold leading-tight tabular-nums">{count.toLocaleString()}</div>
+        {delta ? (
+          <div className="flex items-center gap-1 text-[9.5px]"
                style={{ color: delta.dir === "up" ? "var(--sev-critical)" : "var(--sev-low)" }}>
-            {delta.dir === "up" ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+            {delta.dir === "up" ? <ArrowUp className="h-2.5 w-2.5" /> : <ArrowDown className="h-2.5 w-2.5" />}
             {delta.pct}% vs previous
           </div>
+        ) : (
+          <div className="text-[9.5px] text-muted-foreground">no prior run — no delta</div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
+
+function fmtDuration(seconds: number | null): string {
+  if (seconds == null) return "n/a";
+  const s = Math.round(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m ${s % 60}s`;
+  return `${Math.floor(s / 3600)}h ${Math.floor((s % 3600) / 60)}m`;
+}
+
+/** The ops footer, wired to /api/metrics (soc.metrics aggregates incidents,
+ *  assets, users and run history). null values render as n/a or a dash with
+ *  the reason in the title — never an invented number. */
+function OpsFooter() {
+  const { data: m } = useQuery<Metrics>({ queryKey: ["metrics"], queryFn: api.metrics });
+
+  const entries: { label: string; value: string; icon?: LucideIcon; title?: string }[] = m ? [
+    { label: "Open Incidents", value: String(m.openIncidents), icon: Shield,
+      title: "Incidents not yet resolved, from the incident subsystem" },
+    { label: "MTTD", value: fmtDuration(m.mttdSeconds),
+      title: m.mttdSeconds == null
+        ? "Mean time to detect needs acknowledged incidents — no lifecycle basis yet"
+        : `Mean of created→acknowledged over ${m.mttdBasis} incident(s)` },
+    { label: "MTTR", value: fmtDuration(m.mttrSeconds),
+      title: m.mttrSeconds == null
+        ? "Mean time to resolve needs resolved incidents — no lifecycle basis yet"
+        : `Mean of created→resolved over ${m.mttrBasis} incident(s)` },
+    { label: "Assets at Risk", value: m.assetsAtRisk == null ? "—" : String(m.assetsAtRisk),
+      icon: Monitor, title: "Hosts in the current run with a HIGH or CRITICAL finding" },
+    { label: "Users at Risk", value: m.usersAtRisk == null ? "—" : String(m.usersAtRisk),
+      icon: Users, title: "Accounts targeted by findings in the current run" },
+    { label: "Data Sources", value: String(m.dataSources), icon: Database,
+      title: "Distinct analyzed sources across the run history" },
+  ] : [];
+
+  return (
+    <div className="rounded-lg bg-card px-5 py-[18px] shadow-card">
+      {m ? (
+        <>
+          <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-[18px]">
+            {entries.map(({ label, value, icon: Icon, title }) => (
+              <div key={label} className="flex items-center gap-[13px]" title={title}>
+                {Icon && <Icon className="h-[27px] w-[27px] flex-none text-muted-foreground" strokeWidth={1.6} aria-hidden />}
+                <div>
+                  <div className="text-[12.5px] text-muted-foreground">{label}</div>
+                  <div className="text-[23px] font-bold leading-tight tabular-nums">{value}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="mt-4 text-xs leading-normal text-muted-foreground">
+            <b className="text-foreground">Operational metrics — derived, never invented.</b>{" "}
+            Incident counts and MTTD/MTTR come from the incident subsystem's real
+            lifecycle stamps (n/a until incidents are acknowledged or resolved);
+            asset and user risk are derived from the current run's findings.
+          </p>
+        </>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          Operational metrics are unavailable — the backend's /api/metrics did
+          not answer. Nothing is shown rather than an invented number.
+        </p>
+      )}
+    </div>
+  );
+}
+
+const th = "border-b px-2.5 py-[9px] text-left text-[12.5px] font-semibold text-muted-foreground";
+const td = "border-b px-2.5 py-[11px] align-middle";
 
 export function Overview() {
   const { data, isLoading, error } = useQuery({ queryKey: ["overview"], queryFn: api.overview });
@@ -62,9 +133,9 @@ export function Overview() {
     return (
       <Card className="border-dashed">
         <CardContent className="p-6 text-[12.5px] text-muted-foreground">
-          {(data as { error: string } | undefined)?.error ?? "No run yet"} — analyze a log
-          first (open <Link className="text-primary underline" to="/alerts">Alerts</Link> or
-          upload below). No sample data is shown in its place.
+          {(data as { error: string } | undefined)?.error ?? "No run yet"} — upload a
+          log above or open <Link className="text-primary underline" to="/alerts">Alerts</Link>.
+          No sample data is shown in its place.
         </CardContent>
       </Card>
     );
@@ -72,105 +143,115 @@ export function Overview() {
 
   const k = overview.kpis;
   return (
-    <div className="flex flex-wrap items-start gap-5">
-      <div className="min-w-0 flex-1 space-y-5">
-        <div className="grid grid-cols-2 gap-3.5 md:grid-cols-3 xl:grid-cols-5">
-          <KpiCard label="Total Alerts" count={k.total} delta={k.deltas.total} color="hsl(var(--primary))" />
-          <KpiCard label="Critical" count={k.critical} delta={k.deltas.critical} color={sevVar("CRITICAL")} />
-          <KpiCard label="High" count={k.high} delta={k.deltas.high} color={sevVar("HIGH")} />
-          <KpiCard label="Medium" count={k.medium} delta={k.deltas.medium} color={sevVar("MEDIUM")} />
-          <KpiCard label="Low" count={k.low} delta={k.deltas.low} color={sevVar("LOW")} />
-        </div>
+    <div className="flex flex-col gap-4">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(148px,1fr))] gap-[9px]">
+        <KpiCard label="Total Alerts" count={k.total} delta={k.deltas.total} icon={Bell} />
+        <KpiCard label="Critical" count={k.critical} delta={k.deltas.critical} icon={OctagonAlert} color={sevVar("CRITICAL")} />
+        <KpiCard label="High" count={k.high} delta={k.deltas.high} icon={CircleAlert} color={sevVar("HIGH")} />
+        <KpiCard label="Medium" count={k.medium} delta={k.deltas.medium} icon={CircleArrowDown} color={sevVar("MEDIUM")} />
+        <KpiCard label="Low" count={k.low} delta={k.deltas.low} icon={ShieldCheck} color={sevVar("LOW")} />
+      </div>
 
-        <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
-          <Card>
-            <CardHeader><CardTitle>Alerts by Severity</CardTitle></CardHeader>
-            <CardContent><SeverityDonut data={overview.severityDonut} /></CardContent>
-          </Card>
-          <Card>
-            <CardHeader><CardTitle>Alerts Over Time</CardTitle></CardHeader>
-            <CardContent><AlertsOverTime data={overview.alertsOverTime} /></CardContent>
-          </Card>
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                Top Attack Tactics (MITRE){" "}
-                <span className="font-normal text-muted-foreground">derived tags — not verdicts</span>
-              </CardTitle>
-            </CardHeader>
-            <CardContent><TacticBars data={overview.mitreTactics} /></CardContent>
-          </Card>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(300px,1fr))] items-stretch gap-4">
+        <div className="min-w-0 rounded-lg bg-card px-[18px] py-4 shadow-card">
+          <h3 className="mb-3.5 text-[15px] font-semibold">Alerts by Severity</h3>
+          <SeverityDonut data={overview.severityDonut} />
         </div>
+        <div className="min-w-0 rounded-lg bg-card px-[18px] py-4 shadow-card">
+          <h3 className="mb-3.5 text-[15px] font-semibold">Alerts Over Time</h3>
+          <AlertsOverTime data={overview.alertsOverTime} />
+        </div>
+        <div className="min-w-0 rounded-lg bg-card px-[18px] py-4 shadow-card">
+          <h3 className="mb-[3px] text-[15px] font-semibold">Top Attack Tactics (MITRE)</h3>
+          <p className="mb-3.5 text-[11.5px] text-muted-foreground">derived tags — not verdicts</p>
+          <TacticBars data={overview.mitreTactics} />
+        </div>
+      </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>
-              Latest Alerts{" "}
-              <span className="font-normal text-muted-foreground">
-                most recent first · drill into Alerts for evidence
-              </span>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="overflow-x-auto">
-            <table className="w-full text-[12.5px]">
-              <thead>
-                <tr className="border-b text-left text-[10.5px] uppercase tracking-wide text-muted-foreground">
-                  <th className="px-2 py-2">Time</th><th className="px-2 py-2">Severity</th>
-                  <th className="px-2 py-2">Attacker Status</th><th className="px-2 py-2">Primary MITRE Tactics</th>
-                  <th className="px-2 py-2">Alert</th><th className="px-2 py-2">Source</th>
-                  <th className="px-2 py-2">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {overview.latestAlerts.length === 0 && (
-                  <tr><td colSpan={7} className="px-2 py-4 text-muted-foreground">
-                    No alerts in this window.</td></tr>
-                )}
-                {overview.latestAlerts.map((a) => (
-                  <tr key={a.id} className="border-b last:border-0 align-top">
-                    <td className="whitespace-nowrap px-2 py-2 font-mono text-[11.5px] text-muted-foreground">{a.time}</td>
-                    <td className="px-2 py-2"><SeverityBadge severity={a.severity} /></td>
-                    <td className="px-2 py-2">
-                      <span className="whitespace-nowrap rounded border bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
-                            title="Derived kill-chain grouping of this alert's MITRE tactics — a display aid, not a verdict">
-                        {a.attackerStatus || "—"}
-                      </span>
-                    </td>
-                    <td className="px-2 py-2">
-                      {a.tactics.length
-                        ? a.tactics.map((t) => (
-                            <span key={t} className="mb-0.5 mr-1 inline-block rounded bg-accent px-1.5 py-0.5 text-[10.5px] text-accent-foreground">{t}</span>
-                          ))
-                        : "—"}
-                    </td>
-                    <td className="px-2 py-2">{a.name}</td>
-                    <td className="px-2 py-2 font-mono text-[11.5px] text-muted-foreground">{a.source || "—"}</td>
-                    <td className="px-2 py-2">
-                      <Link to={`/alerts?sel=${encodeURIComponent(a.id)}`} className="text-primary hover:underline">
-                        View
+      <div className="min-w-0 rounded-lg bg-card px-[18px] py-4 shadow-card">
+        <h3 className="mb-3 text-[15px] font-semibold">
+          Latest Alerts{" "}
+          <span className="text-[11.5px] font-normal text-muted-foreground">
+            {overview.latestAlerts.length} most recent of {k.total} · drill into Alerts for evidence
+          </span>
+        </h3>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[940px] border-collapse text-[13px]">
+            <thead>
+              <tr>
+                <th className={th}>Time</th>
+                <th className={th}>Severity</th>
+                <th className={th}>Attacker Status</th>
+                <th className={th}>Primary MITRE Tactics</th>
+                <th className={`${th} min-w-[320px]`}>Alert Name / Description</th>
+                <th className={th}>Source</th>
+                <th className={th}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {overview.latestAlerts.length === 0 && (
+                <tr><td colSpan={7} className="px-2.5 py-4 text-muted-foreground">
+                  No alerts in this window.</td></tr>
+              )}
+              {overview.latestAlerts.map((a) => (
+                <tr key={a.id} data-testid="latest-alert-row">
+                  <td className={`${td} whitespace-nowrap tabular-nums`}>{a.time}</td>
+                  <td className={td}>
+                    <span className="inline-flex items-center gap-2 whitespace-nowrap font-semibold"
+                          style={{ color: sevVar(a.severity) }}>
+                      <i className="h-[9px] w-[9px] flex-none rounded-full"
+                         style={{ background: sevVar(a.severity) }} />
+                      {a.severity.charAt(0) + a.severity.slice(1).toLowerCase()}
+                    </span>
+                  </td>
+                  <td className={td}>
+                    <span className="whitespace-nowrap"
+                          title="Derived kill-chain grouping of this alert's MITRE tactics — a display aid, not a verdict">
+                      {a.attackerStatus || "—"}
+                    </span>
+                  </td>
+                  <td className={td}>
+                    <span title="derived, does not affect severity">
+                      {a.tactics.length ? a.tactics.join(", ") : "—"}
+                    </span>
+                  </td>
+                  <td className={td}>{a.name}</td>
+                  <td className={td}>
+                    {a.source
+                      ? <span title={a.source} className="cursor-help border-b border-dotted">
+                          {a.source.split("/").pop()}
+                        </span>
+                      : "—"}
+                  </td>
+                  <td className={td}>
+                    <span className="inline-flex items-center gap-3 text-muted-foreground">
+                      <Link to={`/alerts?sel=${encodeURIComponent(a.id)}`}
+                            title="View this finding's evidence in Alerts" aria-label="View finding"
+                            className="inline-flex hover:text-accent-foreground">
+                        <Eye className="h-4 w-4" strokeWidth={1.8} aria-hidden />
                       </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
-
-        <Card className="border-dashed">
-          <CardContent className="p-4 text-[12.5px] text-muted-foreground">
-            <b className="text-foreground">Operational metrics — coming soon.</b>{" "}
-            Open incidents, MTTD, MTTR and asset/user risk need incident-tracking
-            subsystems that do not exist yet, so nothing is shown here rather than
-            an invented number.
-          </CardContent>
-        </Card>
+                      <a href={`/alerts?sel=${encodeURIComponent(a.id)}`} target="_blank" rel="noreferrer"
+                         title="Open this finding in a new tab" aria-label="Open finding"
+                         className="inline-flex hover:text-accent-foreground">
+                        <ExternalLink className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+                      </a>
+                      <button disabled title="Row actions need case management — a later phase"
+                              aria-label="More actions"
+                              className="inline-flex cursor-not-allowed opacity-50">
+                        <MoreVertical className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+                      </button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      <div className="w-full space-y-5 xl:w-80 xl:flex-none">
-        <AiAnalyst model={overview.model} />
-        <IngestionPanel ingestion={overview.ingestion} />
-      </div>
+      <OpsFooter />
+
+      <AiAnalyst model={overview.model} />
     </div>
   );
 }

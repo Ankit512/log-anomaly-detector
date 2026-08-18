@@ -26,6 +26,8 @@ export default {
         },
       },
       borderRadius: { lg: "12px", md: "8px", sm: "6px" },
+      // The v6 card shadow, themed via the --shadow var in index.css.
+      boxShadow: { card: "var(--shadow)" },
       fontFamily: {
         sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
         mono: ["ui-monospace", "Menlo", "Monaco", "Cascadia Code", "monospace"],

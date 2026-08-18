@@ -3,7 +3,7 @@ import { render } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { vi } from "vitest";
-import type { ConsoleState, Finding, OverviewData } from "@/lib/api";
+import type { ConsoleState, Finding, Metrics, OverviewData } from "@/lib/api";
 
 export function renderApp(ui: ReactElement, { route = "/" } = {}) {
   const qc = new QueryClient({
@@ -57,6 +57,15 @@ export const OVERVIEW: OverviewData = {
   }],
   ingestion: { acceptedLabel: "CSV, JSON, TXT, RAW, HTML", files: [{ name: "auth.log", ok: true }] },
   model: "llama3.1:8b",
+};
+
+/** /api/metrics as soc.metrics() emits it: incidents exist but none carry
+ *  acknowledge/resolve stamps yet, so MTTD/MTTR honestly have no basis. */
+export const METRICS: Metrics = {
+  openIncidents: 2,
+  mttdSeconds: null, mttdBasis: 0,
+  mttrSeconds: null, mttrBasis: 0,
+  assetsAtRisk: 3, usersAtRisk: 1, dataSources: 4,
 };
 
 export function finding(i: number, over: Partial<Finding> = {}): Finding {
