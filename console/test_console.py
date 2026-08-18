@@ -162,6 +162,9 @@ console.log("0. log-source picker (serve.py started with no --input):");
   check("(b) local file input present", p.includes('id="fileInput"') && p.includes('data-act="upload"'));
   check("(b) states the file never leaves the machine",
         p.includes("never leaves this machine"));
+  check("(b) accept attr lists the broadened types",
+        p.includes('accept=".log,.txt,.out,.syslog,.messages,.err,.1,.2"'));
+  check("(b) hint names the accepted types", p.includes("reads as plain text"));
   check("(c) URL field + fetch action", p.includes('id="urlInput"') && p.includes('data-act="fetch"'));
   check("(c) suggested LogHub chips", p.includes("data-suggest="));
   check("(c) network source is visually separated", p.includes("src-net"));
@@ -784,6 +787,73 @@ def check_log360():
     values = {s["value"] for s in serve.bundled_samples()}
     check("picker offers the Log360 CSV sample", "samples/log360_export.csv" in values)
     check("picker offers the Log360 syslog sample", "samples/log360_syslog.log" in values)
+
+    # File-type acceptance is a gate at the door only: it may refuse a file, but
+    # accepting one must never change parsing or severity. (a) proves acceptance
+    # feeds the normal parse -> rules path; (b) proves acceptance without
+    # recognition still reports the honest zero; (c) proves binary is refused
+    # with the exact user-facing message.
+    print("\nfile-type acceptance — broadened formats, honest rejection:")
+    import normalize
+    import anomaly_detector
+
+    with tempfile.TemporaryDirectory(prefix="accept-test-") as tmp:
+        # (a) canonical log lines inside a .txt: accepted, parsed, rules fire.
+        canonical = "".join(
+            f"2026-08-13T02:16:{44 + i:02d}Z ERROR server-01 auth failed for user "
+            f"'admin' from 203.0.113.44 (invalid password)\n" for i in range(6)
+        ) + "2026-08-13T02:17:02Z INFO  server-01 healthcheck ok\n"
+        try:
+            dest = serve.save_upload("renamed.txt", canonical.encode(), tmp)
+            check("(a) canonical-format .txt accepted", True)
+        except ValueError as e:
+            dest = None
+            check("(a) canonical-format .txt accepted", False, str(e))
+        if dest:
+            records, stats = normalize.load(dest)
+            check("(a) every line parses", stats["parsed"] == 7 and stats["unparsed"] == 0,
+                  f"{stats['parsed']} parsed / {stats['unparsed']} unparsed")
+            anomalies = anomaly_detector.detect(records)
+            check("(a) rules yield findings from the .txt",
+                  any(a["type"].startswith("auth_bruteforce") for a in anomalies),
+                  f"{len(anomalies)} finding(s), none auth_bruteforce")
+
+        # (b) gibberish text .txt: accepted — but NOT recognized, and the state
+        # that drives the console must say so instead of faking green.
+        gibberish = "\n".join(f"@@ {i} :: lorem ipsum ~~ no timestamp here" for i in range(30)) + "\n"
+        try:
+            dest = serve.save_upload("notes.txt", gibberish.encode(), tmp)
+            check("(b) gibberish .txt accepted (it is text)", True)
+        except ValueError as e:
+            dest = None
+            check("(b) gibberish .txt accepted (it is text)", False, str(e))
+        if dest:
+            records, stats = normalize.load(dest)
+            check("(b) nothing parses", stats["parsed"] == 0 and stats["unparsed"] == 30,
+                  f"{stats['parsed']} parsed / {stats['unparsed']} unparsed")
+            state = serve.adapter.adapt({"source_file": str(dest), "findings": [],
+                                         "lines_parsed": stats["parsed"],
+                                         "lines_unparsed": stats["unparsed"]})
+            check("(b) console state flags the unrecognized-format banner",
+                  state["unrecognized"] and not state["emptyInput"])
+
+        # (c) binary (NUL bytes) with an unknown name: refused, exact wording.
+        binary = b"\x7fELF\x02\x01\x01\x00" + bytes(range(256)) * 8
+        try:
+            serve.save_upload("core.dump", binary, tmp)
+            check("(c) binary file rejected", False, "it was accepted")
+        except ValueError as e:
+            check("(c) binary file rejected", True)
+            check("(c) rejection uses the exact message",
+                  str(e) == "This doesn't look like a text log file.", str(e))
+
+        # Name gate: every promised name form is accepted without sniffing.
+        for name in ("a.log", "a.txt", "a.out", "a.syslog", "a.messages", "a.err",
+                     "app.log.1", "app.log.2", "syslog", "messages", "auth"):
+            check(f"name accepted: {name}", serve.accepted_by_name(name))
+        for name in ("core.dump", "disk.img", "archive.tar.gz", "readme"):
+            check(f"name not pre-accepted (sniffed instead): {name}",
+                  not serve.accepted_by_name(name))
 
     return 0 if all(results) else 1
 

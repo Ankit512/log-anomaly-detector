@@ -68,6 +68,53 @@ MAX_UPLOAD_BYTES = 64 * 1024 * 1024
 MAX_DOWNLOAD_BYTES = 64 * 1024 * 1024
 DOWNLOAD_TIMEOUT = 60
 
+# ---------------------------------------------------------------------------
+# File-type acceptance
+# ---------------------------------------------------------------------------
+# A gate at the door ONLY. Accepting a file never changes parsing or severity:
+# an accepted file whose format nothing recognizes still comes back as
+# "0 lines parsed" with the unrecognized-format banner, never a fake all-clear.
+
+ACCEPT_EXTS = {".log", ".txt", ".out", ".syslog", ".messages", ".err"}
+ACCEPT_BARE_NAMES = {"syslog", "messages", "auth"}      # extension-less system logs
+SNIFF_BYTES = 64 * 1024
+REJECT_NOT_TEXT = "This doesn't look like a text log file."
+
+
+def accepted_by_name(filename):
+    """Names that already mark a file as a log, including rotated .log.1/.log.2."""
+    name = Path(filename or "").name.lower()
+    if not name:
+        return False
+    if "." not in name:
+        return name in ACCEPT_BARE_NAMES
+    stem, _, ext = name.rpartition(".")
+    if f".{ext}" in ACCEPT_EXTS:
+        return True
+    return ext.isdigit() and stem.endswith(".log")
+
+
+def looks_like_text(data):
+    """Sniff the head of the file: text has no NUL bytes and decodes cleanly."""
+    head = data[:SNIFF_BYTES]
+    if b"\x00" in head:
+        return False
+    for enc in ("utf-8", "latin-1"):
+        try:
+            head.decode(enc)
+            return True
+        except UnicodeDecodeError:
+            continue
+    return False
+
+
+def check_file_accepted(filename, data):
+    """Accept known log names outright; sniff everything else, rejecting non-text."""
+    if accepted_by_name(filename):
+        return
+    if not looks_like_text(data):
+        raise ValueError(REJECT_NOT_TEXT)
+
 # Public log corpora, offered as one-click chips. Nothing is fetched until asked.
 SUGGESTED_URLS = [
     {"label": "LogHub · OpenSSH (2k lines)",
@@ -246,6 +293,7 @@ def fetch_url(url, dest_dir):
         raise ValueError("the URL returned an empty file")
 
     name = Path(urllib.parse.unquote(parsed.path)).name or "downloaded.log"
+    check_file_accepted(name, data)
     dest = Path(dest_dir) / name
     dest.write_bytes(data)
     return dest
@@ -257,6 +305,7 @@ def save_upload(filename, data, dest_dir):
         raise ValueError("the uploaded file was empty")
     if len(data) > MAX_UPLOAD_BYTES:
         raise ValueError(f"file is larger than {MAX_UPLOAD_BYTES // (1024 * 1024)}MB")
+    check_file_accepted(filename, data)
     safe = Path(filename or "uploaded.log").name or "uploaded.log"
     dest = Path(dest_dir) / safe
     dest.write_bytes(data)
