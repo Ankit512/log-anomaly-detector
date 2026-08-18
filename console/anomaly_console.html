@@ -180,6 +180,7 @@ a:hover{color:var(--color-accent-400)}
 
 .chips{display:flex;flex-wrap:wrap;gap:var(--space-2);margin-top:var(--space-1)}
 .tagm{font-size:10.5px;padding:2px 8px;border-radius:5px;background:var(--color-neutral-800);color:var(--color-neutral-200);font-family:var(--font-mono)}
+.tag-mitre{background:rgba(121,108,191,.16);color:#b2a7e8;border:1px solid rgba(121,108,191,.35)}
 
 .empty{margin-top:56px;text-align:center;padding:0 var(--space-8)}
 .empty-mark{width:44px;height:44px;margin:0 auto var(--space-6);border-radius:50%;border:1px solid var(--color-neutral-800);display:flex;align-items:center;justify-content:center;color:var(--ok);font-size:18px}
@@ -850,9 +851,15 @@ function row(f, cur) {
   const deltaBg = dis ? "rgba(226,128,127,.14)" : "transparent";
   const deltaFg = dis ? "#e2807f" : "#75798c";
 
-  const chips = f.chips.length
-    ? `<div class="chips">${f.chips.map((c) => `<span class="tagm">${esc(c.text)}</span>`).join("")}</div>`
-    : "";
+  /* ATT&CK tags are derived annotation from threat_intel/rule_mitre_map.py —
+     context only, never a severity signal. An unmapped rule carries no tag
+     rather than a guessed one. */
+  const tags = [
+    ...(f.mitre || []).map((t) => `<span class="tagm tag-mitre" title="MITRE ATT&CK (derived; does not affect severity)">${
+      esc(t.id)} · ${esc(t.name)} · ${esc(t.tactic)}</span>`),
+    ...f.chips.map((c) => `<span class="tagm">${esc(c.text)}</span>`),
+  ];
+  const chips = tags.length ? `<div class="chips">${tags.join("")}</div>` : "";
 
   return `
   <div class="row" data-row="${f.id}"

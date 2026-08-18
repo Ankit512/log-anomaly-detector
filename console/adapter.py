@@ -28,8 +28,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "threat_intel"))
 
 import normalize  # noqa: E402
+from rule_mitre_map import techniques_for_rule  # noqa: E402
 
 SEV_COLOR = {
     "CRITICAL": "#e2807f", "HIGH": "#d8a35e", "MEDIUM": "#dcb64a",
@@ -184,6 +186,10 @@ def adapt(report, threat_report=None):
             "predicate": f.get("predicate", ""),
             "ruleRef": RULE_REF.get(f.get("rule_id"), ""),
             "occurrences": f.get("occurrences", 1),
+            # Derived ATT&CK annotation from threat_intel/rule_mitre_map.py.
+            # Read-only context: it never alters severity, verdict, or order,
+            # and an unmapped rule gets [] — the console then shows nothing.
+            "mitre": techniques_for_rule(f.get("rule_id")),
             "chips": chips,
             "lines": lines,
             "linesNote": lines_note,
