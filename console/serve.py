@@ -53,6 +53,7 @@ sys.path.insert(0, str(HERE))
 import adapter  # noqa: E402
 import export  # noqa: E402
 import redact  # noqa: E402
+import soc  # noqa: E402
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -881,6 +882,35 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(runs_summary())
         elif path == "/api/compute":
             self._json(masked_compute())
+        # --- SOC subsystems (console/soc.py; contract in docs/soc_subsystems.md)
+        elif path == "/api/incidents":
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            self._json({"incidents": soc.list_incidents(
+                STATE, state_filter=(qs.get("state") or [None])[0])})
+        elif path.startswith("/api/incidents/"):
+            inc = soc.get_incident(path.split("/")[3])
+            self._json(inc) if inc else self._json({"error": "no such incident"}, 404)
+        elif path == "/api/assets":
+            if STATE.get("idle"):
+                self._json({"error": "no run yet — analyze a log first"})
+            else:
+                self._json({"assets": soc.derive_assets(STATE)})
+        elif path == "/api/users":
+            if STATE.get("idle"):
+                self._json({"error": "no run yet — analyze a log first"})
+            else:
+                self._json({"users": soc.derive_users(STATE)})
+        elif path == "/api/cases":
+            self._json({"cases": soc.list_cases()})
+        elif path.startswith("/api/cases/"):
+            case = soc.get_case(path.split("/")[3])
+            self._json(case) if case else self._json({"error": "no such case"}, 404)
+        elif path == "/api/reports":
+            self._json({"reports": soc.list_reports()})
+        elif path == "/api/threat-intel":
+            self._json(soc.threat_intel_summary())
+        elif path == "/api/metrics":
+            self._json(soc.metrics(STATE, [r.get("label") for r in list_runs()]))
         else:
             self.send_error(404, "This server only serves the console, its state, and /api")
 
@@ -888,6 +918,7 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_POST(self):
+        global STATE, CURRENT_RUN_FILE
         path = urllib.parse.urlparse(self.path).path
         if path == "/api/analyze":
             self._analyze()
@@ -903,15 +934,60 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._set_compute()
         elif path == "/api/ask":
             self._ask()
+        elif path.startswith("/api/incidents/") and path.endswith("/state"):
+            self._incident_state(path.split("/")[3])
+        elif path == "/api/cases":
+            self._create_case()
+        elif path == "/api/reports":
+            if STATE.get("idle"):
+                return self._json({"error": "no run to report on yet"}, 409)
+            self._json(soc.generate_report(STATE))
         elif path == "/api/reset":
-            global STATE, CURRENT_RUN_FILE
             STATE = {"idle": True}
             CURRENT_RUN_FILE = None
             self._json(STATE)
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
 
-    do_PUT = do_DELETE = do_PATCH = lambda self: self.send_error(405, "read-only")
+    do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
+
+    def do_PATCH(self):
+        """PATCH exists for exactly one thing: editing an analyst-created case."""
+        path = urllib.parse.urlparse(self.path).path
+        if not path.startswith("/api/cases/"):
+            return self.send_error(405, "read-only")
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            case = soc.patch_case(path.split("/")[3], payload)
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._json({"error": str(e)}, 400)
+        if not case:
+            return self._json({"error": "no such case"}, 404)
+        return self._json(case)
+
+    def _incident_state(self, iid):
+        """Analyst lifecycle transition on one incident."""
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            inc = soc.set_incident_state(iid, payload.get("state"))
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._json({"error": str(e)}, 400)
+        if not inc:
+            return self._json({"error": "no such incident"}, 404)
+        print(f"  incident {iid}: -> {inc['state']}", flush=True)
+        return self._json(inc)
+
+    def _create_case(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+            case = soc.create_case(payload)
+        except (ValueError, json.JSONDecodeError) as e:
+            return self._json({"error": str(e)}, 400)
+        print(f"  case created: {case['id']} {case['title'][:40]!r}", flush=True)
+        return self._json(case, 201)
 
     def _analyze(self):
         length = int(self.headers.get("Content-Length") or 0)

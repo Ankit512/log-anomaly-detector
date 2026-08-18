@@ -16,6 +16,7 @@ console/console_state.json
 
 # saved run history for the console (local results, machine-specific)
 console/.runs/
+console/.soc/
 
 # graphify (local tooling: knowledge graph, project skill, hooks)
 graphify-out/
