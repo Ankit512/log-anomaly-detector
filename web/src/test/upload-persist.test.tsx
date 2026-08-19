@@ -36,7 +36,8 @@ describe("upload runs as a persistent background job", () => {
     expect(within(toast).getByText("server.csv")).toBeInTheDocument();
 
     // Navigate to another page — the notifier (shell-level, store-backed) stays.
-    await userEvent.click(screen.getByRole("link", { name: /Incidents/ }));
+    // (Cases is still a placeholder; Incidents et al. are now real pages.)
+    await userEvent.click(screen.getByRole("link", { name: /Cases/ }));
     expect(screen.getByText(/coming in a later phase/i)).toBeInTheDocument();
     expect(screen.getByRole("status", { name: "Upload notification" })).toBeInTheDocument();
     expect(within(screen.getByRole("status", { name: "Upload notification" }))

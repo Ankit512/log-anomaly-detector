@@ -131,6 +131,67 @@ export interface RunsSummary {
   };
 }
 
+// --- Phase C (Incidents / Threat Intel / Assets / Reports) ---
+// Shapes mirror console/soc.py exactly (contract: docs/soc_subsystems.md).
+// Every value is derived from real findings/events/files or is null — the UI
+// renders null as n/a and an absent inventory as an honest empty state.
+
+export interface Technique { id: string; name: string; tactic: string }
+
+/** Analyst lifecycle: the ONLY mutable part of an incident. Rules still own
+ *  severity — `severity` here is the max member verdict, a display rollup. */
+export type IncidentState = "new" | "acknowledged" | "investigating" | "resolved";
+export const INCIDENT_STATES: IncidentState[] =
+  ["new", "acknowledged", "investigating", "resolved"];
+
+export interface Incident {
+  id: string;
+  runId: string;
+  entity: string;
+  entityKind: "ip" | "host" | "rule";
+  title: string;
+  severity: string;              // max member severity — display aggregation
+  state: IncidentState;
+  findingIds: string[];
+  findingCount: number;
+  techniques: Technique[];
+  attackerStatus: string;        // "" when unmapped
+  createdAt: string | null;      // earliest finding time = detection
+  firstSeen: string | null;
+  lastSeen: string | null;
+  acknowledgedAt: string | null; // stamped by the analyst, else null
+  resolvedAt: string | null;
+  timeUncertain: boolean;
+}
+
+export interface Asset {
+  id: string; name: string; kind: "host" | "ip";
+  events: number; findings: number; atRisk: boolean;
+  lastSeen: string | null;
+}
+
+export interface UserEntity {
+  id: string; name: string; events: number; findings: number; atRisk: boolean;
+}
+
+export interface ThreatIndicator {
+  id: string; name: string; pattern: string;
+  types: string[]; validFrom: string;
+}
+
+export interface ThreatIntel {
+  indicators: ThreatIndicator[];
+  indicatorSource: string;
+  ruleTechniques: Record<string, Technique[]>;
+  attackCacheWarm: boolean;
+}
+
+export interface Report { name: string; bytes: number; createdAt: string }
+
+/** Both /api/assets and /api/users return {error} (HTTP 200) when the server
+ *  is idle — an empty inventory is indistinguishable from "nothing at risk". */
+type OrError<T> = T | { error: string };
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -217,5 +278,39 @@ export const api = {
     if (res.ok || res.status === 202) return { ok: true };
     const body = await res.json().catch(() => ({}));
     return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
+
+  // --- Phase C endpoints ---
+  incidents: (state?: IncidentState) =>
+    getJson<{ incidents: Incident[] }>(
+      `/api/incidents${state ? `?state=${state}` : ""}`),
+  incident: (id: string) => getJson<OrError<Incident>>(`/api/incidents/${id}`),
+
+  /** Analyst lifecycle transition (POST /api/incidents/<id>/state). Returns the
+   *  updated incident; 400 (bad state) / 404 (unknown id) reject honestly. */
+  setIncidentState: async (id: string, state: IncidentState): Promise<Incident> => {
+    const res = await fetch(`/api/incidents/${id}/state`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+    return body as Incident;
+  },
+
+  assets: () => getJson<OrError<{ assets: Asset[] }>>("/api/assets"),
+  users: () => getJson<OrError<{ users: UserEntity[] }>>("/api/users"),
+  threatIntel: () => getJson<ThreatIntel>("/api/threat-intel"),
+
+  reports: () => getJson<{ reports: Report[] }>("/api/reports"),
+
+  /** Generate a report for the CURRENT run (POST /api/reports). 409 when no run
+   *  is loaded — the exporter has nothing real to render. */
+  generateReport: async (): Promise<Report> => {
+    const res = await fetch("/api/reports", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
+    return body as Report;
   },
 };
