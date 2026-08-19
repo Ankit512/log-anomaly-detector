@@ -22,8 +22,8 @@ export const NAV = [
   { to: "/threat-intel", label: "Threat Intel", icon: Shield, ready: false },
   { to: "/assets", label: "Assets", icon: Monitor, ready: false },
   { to: "/reports", label: "Reports", icon: FileText, ready: false },
-  { to: "/cases", label: "Cases", icon: Folder, ready: false },
-  { to: "/settings", label: "Settings", icon: Settings, ready: false },
+  { to: "/cases", label: "Cases", icon: Folder, ready: true },
+  { to: "/settings", label: "Settings", icon: Settings, ready: true },
 ] as const;
 
 const TITLES: Record<string, string> = {
@@ -56,14 +56,19 @@ function Sidebar() {
             {label}
           </NavLink>
         ))}
-        <button
-          disabled
-          title="No session system yet — nothing behind this item"
-          className="mt-8 flex cursor-not-allowed items-center gap-[11px] rounded-md px-[11px] py-[9px] text-left text-[13.5px] text-muted-foreground opacity-55"
+        <NavLink
+          to="/logout"
+          title="Local single-user tool — no server session; clears local UI state"
+          className={({ isActive }) =>
+            cn(
+              "mt-8 flex items-center gap-[11px] rounded-md px-[11px] py-[9px] text-left text-[13.5px] text-muted-foreground hover:bg-background",
+              isActive && "bg-accent font-semibold text-accent-foreground hover:bg-accent",
+            )
+          }
         >
           <LogOut className="h-[17px] w-[17px] flex-none" strokeWidth={1.8} aria-hidden />
           Logout
-        </button>
+        </NavLink>
       </nav>
     </aside>
   );

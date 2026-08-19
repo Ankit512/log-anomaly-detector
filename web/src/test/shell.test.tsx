@@ -1,5 +1,6 @@
 import { screen, within } from "@testing-library/react";
 import App from "@/App";
+import { NAV } from "@/components/layout/AppShell";
 import { renderApp, mockFetch, OVERVIEW, METRICS } from "./helpers";
 
 describe("uniform v6 app shell", () => {
@@ -11,11 +12,13 @@ describe("uniform v6 app shell", () => {
                         "Assets", "Reports", "Cases", "Settings", "Logout"]) {
       expect(screen.getByText(item)).toBeInTheDocument();
     }
-    // v6 drops the "soon" pills: unbuilt nav items carry a title instead, and
-    // Logout is a disabled button with its own honest title.
+    // Unbuilt nav items carry an honest "not built yet" title; derive the
+    // expected count from NAV so this stays correct as pages are built.
     const nav = screen.getByRole("navigation", { name: "Main" });
-    expect(within(nav).getAllByTitle(/not built yet/i).length).toBe(6);
-    expect(screen.getByText("Logout").closest("button")).toBeDisabled();
+    const unbuilt = NAV.filter((n) => !n.ready).length;
+    expect(within(nav).getAllByTitle(/not built yet/i).length).toBe(unbuilt);
+    // Logout is an honest local action (a link to /logout), not a fake auth flow.
+    expect(screen.getByText("Logout").closest("a")).toHaveAttribute("href", "/logout");
   });
 
   it("renders the v6 header actions on every page", async () => {
@@ -28,8 +31,10 @@ describe("uniform v6 app shell", () => {
     expect(screen.getByRole("button", { name: /switch to dark mode/i })).toBeInTheDocument();
   });
 
-  it("placeholder routes render inside the same shell, honestly", async () => {
-    renderApp(<App />, { route: "/incidents" });
+  it("an unknown route renders the honest placeholder inside the same shell", async () => {
+    // Use the catch-all (a genuinely unknown path) so this holds regardless of
+    // which section pages have been built.
+    renderApp(<App />, { route: "/no-such-page" });
     expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
     expect(screen.getByText(/coming in a later phase/i)).toBeInTheDocument();
     expect(screen.getByText(/rather than invented data/i)).toBeInTheDocument();
