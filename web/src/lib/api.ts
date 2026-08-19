@@ -321,6 +321,20 @@ export const api = {
     return { ok: false, error: body.error ?? `HTTP ${res.status}` };
   },
 
+  /** Ingest a log from a public URL: the backend fetches it (http/https only,
+   *  SSRF/size/text-gated) and runs the SAME analyze pipeline. A bad or unsafe
+   *  URL comes back as an honest 400 with the real reason. */
+  analyzeUrl: async (url: string): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    if (res.ok || res.status === 202) return { ok: true };
+    const body = await res.json().catch(() => ({}));
+    return { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
+
   // --- Phase C endpoints ---
   incidents: (state?: IncidentState) =>
     getJson<{ incidents: Incident[] }>(

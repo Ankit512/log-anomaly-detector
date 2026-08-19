@@ -29,6 +29,7 @@ describe("upload runs as a persistent background job", () => {
     renderApp(<App />);
     await screen.findByText("Total Alerts");
 
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
 
     // The shell-level notifier shows the running job.
@@ -61,6 +62,7 @@ describe("upload runs as a persistent background job", () => {
 
     renderApp(<App />);
     await screen.findByText("Total Alerts");
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
 
     const view = await screen.findByRole("button", { name: "View run" }, { timeout: 6000 });

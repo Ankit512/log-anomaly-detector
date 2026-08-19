@@ -1,10 +1,12 @@
+import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Bell, FileText, Filter, Folder, House, LogOut, Monitor,
+  Bell, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
   RefreshCw, Settings, Shield, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { Dialog } from "@/components/ui/dialog";
 import { RunHistory } from "@/components/RunHistory";
 import { RunDropdown } from "@/components/RunDropdown";
 import { IngestNotifier } from "@/components/IngestNotifier";
@@ -78,26 +80,110 @@ function Sidebar() {
  *  /api/analyze path. It hands the file to the shell-level job store, which
  *  runs the analysis as a BACKGROUND job and drives the persistent
  *  IngestNotifier — so the upload survives navigating away from the Overview. */
-function UploadButton() {
+const ACCEPTED_TITLE =
+  "Accepted: LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text. Analyzed locally by the rules engine; results open in Alerts";
+
+/** Two-mode ingest dialog: a local file OR a pasted public URL. Both feed the
+ *  same background job store + IngestNotifier — the source is the only
+ *  difference. URL validity/safety is enforced by the backend (honest error in
+ *  the notifier); here we only sanity-check the shape before submitting. */
+function UploadDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const startUpload = useJobs((s) => s.startUpload);
-  const busy = useJobs((s) => s.busy);
+  const startUrl = useJobs((s) => s.startUrl);
+  const [mode, setMode] = useState<"file" | "link">("file");
+  const [url, setUrl] = useState("");
+
+  const submitUrl = () => {
+    const u = url.trim();
+    if (!u) return;
+    startUrl(u);         // the notifier takes over; a bad URL is an honest error
+    setUrl("");
+    onClose();
+  };
+
+  const seg = (active: boolean) => cn(
+    "flex-1 rounded-md px-3 py-1.5 text-[12.5px] font-medium",
+    active ? "bg-card shadow-card" : "text-muted-foreground hover:text-foreground",
+  );
 
   return (
-    <label
-      title="Accepted: LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text. Analyzed locally by the rules engine; results open in Alerts"
-      className={cn(
-        "inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[10px] border border-primary bg-primary px-[15px] py-2.5 text-[13.5px] font-semibold text-primary-foreground hover:opacity-90",
-        busy && "cursor-progress opacity-70",
+    <Dialog open={open} onClose={onClose} title="Add logs to analyze">
+      <div className="mb-3 flex gap-1 rounded-lg bg-background p-1">
+        <button className={seg(mode === "file")} onClick={() => setMode("file")}>
+          Upload from this computer
+        </button>
+        <button className={seg(mode === "link")} onClick={() => setMode("link")}>
+          Attach a link
+        </button>
+      </div>
+
+      {mode === "file" ? (
+        <div className="flex flex-col gap-2">
+          <label
+            title={ACCEPTED_TITLE}
+            className="flex cursor-pointer flex-col items-center gap-1 rounded-lg border border-dashed px-4 py-6 text-center text-[12.5px] text-muted-foreground hover:border-primary"
+          >
+            <Upload className="h-5 w-5" strokeWidth={1.6} aria-hidden />
+            <span className="text-[13px] font-semibold text-foreground">Choose a log file</span>
+            Analyzed locally — the file never leaves this machine.
+            <input
+              type="file" multiple className="hidden" data-testid="ingest-file"
+              aria-label="Upload logs"
+              onChange={(e) => {
+                if (e.target.files?.length) { startUpload(e.target.files); onClose(); }
+                e.target.value = "";
+              }}
+            />
+          </label>
+          <p className="text-[11px] text-muted-foreground">{ACCEPTED_TITLE}</p>
+        </div>
+      ) : (
+        <form className="flex flex-col gap-2" onSubmit={(e) => { e.preventDefault(); submitUrl(); }}>
+          <label className="text-[11.5px] text-muted-foreground">
+            Public URL of a raw log file
+            <input
+              className="mt-1 w-full rounded-md border bg-card px-2.5 py-2 text-[13px] outline-none focus:border-primary"
+              value={url} onChange={(e) => setUrl(e.target.value)}
+              aria-label="Log file URL" placeholder="https://raw.githubusercontent.com/…/app.log"
+              inputMode="url" autoComplete="off"
+            />
+          </label>
+          <p className="text-[11px] text-muted-foreground">
+            The server fetches it (http/https only, public hosts, size- and
+            text-gated) and runs the same analysis. A page that isn’t a text log
+            is rejected honestly.
+          </p>
+          <div>
+            <button type="submit" disabled={!url.trim()}
+              className="inline-flex items-center gap-2 rounded-md border border-primary bg-primary px-3 py-1.5 text-[12.5px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-60">
+              <LinkIcon className="h-4 w-4" strokeWidth={1.8} aria-hidden /> Fetch &amp; analyze
+            </button>
+          </div>
+        </form>
       )}
-    >
-      <Upload className="h-4 w-4" strokeWidth={1.8} aria-hidden />
-      {busy ? "Analyzing…" : "Upload Logs"}
-      <input
-        type="file" multiple className="hidden" data-testid="ingest-file"
-        aria-label="Upload logs" disabled={busy}
-        onChange={(e) => { if (e.target.files) startUpload(e.target.files); e.target.value = ""; }}
-      />
-    </label>
+    </Dialog>
+  );
+}
+
+function UploadButton() {
+  const busy = useJobs((s) => s.busy);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <button
+        onClick={() => setOpen(true)}
+        title={ACCEPTED_TITLE}
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-2 whitespace-nowrap rounded-[10px] border border-primary bg-primary px-[15px] py-2.5 text-[13.5px] font-semibold text-primary-foreground hover:opacity-90",
+          busy && "cursor-progress opacity-70",
+        )}
+      >
+        <Upload className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+        {busy ? "Analyzing…" : "Upload Logs"}
+      </button>
+      <UploadDialog open={open} onClose={() => setOpen(false)} />
+    </>
   );
 }
 

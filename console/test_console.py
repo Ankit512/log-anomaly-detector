@@ -1060,6 +1060,29 @@ def check_log360():
             check(f"name not pre-accepted (sniffed instead): {name}",
                   not serve.accepted_by_name(name))
 
+    # URL ingest gate: a pasted link must be a PUBLIC http(s) URL. The guard
+    # rejects other schemes and any host that resolves to a non-global address
+    # (loopback / private / link-local / metadata) so it cannot be used for SSRF.
+    print("\nURL ingest — scheme + SSRF guard (serve.validate_public_url):")
+    for bad in ("file:///etc/passwd", "ftp://example.com/x",
+                "http://localhost/app.log", "http://127.0.0.1:8765/x.log",
+                "http://169.254.169.254/latest/meta-data",
+                "http://10.0.0.5/app.log", "http://192.168.1.10/app.log",
+                "not a url"):
+        try:
+            serve.validate_public_url(bad)
+            check(f"rejects unsafe/invalid URL {bad!r}", False, "it was accepted")
+        except ValueError:
+            check(f"rejects unsafe/invalid URL {bad!r}", True)
+    # A public host is allowed through the guard. Use a global IP literal so the
+    # test is hermetic (getaddrinfo on a numeric host makes no DNS query); the
+    # actual fetch is a separate step not exercised here.
+    try:
+        serve.validate_public_url("https://8.8.8.8/app.log")
+        check("allows a public (globally-routable) URL", True)
+    except ValueError as e:
+        check("allows a public (globally-routable) URL", False, str(e))
+
     # The rule -> ATT&CK mapping: source of truth in threat_intel/, attached by
     # the adapter, and NEVER allowed to touch severity or ordering.
     print("\nrule -> MITRE resolution (threat_intel/rule_mitre_map.py):")
