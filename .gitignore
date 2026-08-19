@@ -21,4 +21,3 @@ console/.soc/
 # graphify (local tooling: knowledge graph, project skill, hooks)
 graphify-out/
 .claude/
-CLAUDE.md

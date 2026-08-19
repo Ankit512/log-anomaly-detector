@@ -21,6 +21,8 @@ false all-clear.
 > [`GUIDE.md`](GUIDE.md) is a plain-language overview.
 > [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) has architecture, history and roadmap.
 > [`docs/soc_subsystems.md`](docs/soc_subsystems.md) is the SOC data-model + API contract.
+> [`CLAUDE.md`](CLAUDE.md) holds the repo's non-negotiable guardrails (detector frozen, rules
+> own severity, honest surfaces) for anyone — human or agent — working in the code.
 
 Runs on **macOS, Linux and Windows**. The analysis engine is Python standard library only —
 no `pip install`. The optional React dashboard needs Node (`npm install`) once.
