@@ -40,7 +40,9 @@ describe("Overview page (v6)", () => {
 
   it("shows the run-facts line from the real adapter state", async () => {
     renderApp(<App />);
-    expect(await screen.findByText("auth.log")).toBeInTheDocument();
+    // The run-facts line shows the source basename (full path in its title);
+    // the alerts table also lists a source, so target the run-facts one.
+    expect(await screen.findByTitle("samples/auth.log")).toHaveTextContent("auth.log");
     expect(screen.getByText(/host combo/)).toBeInTheDocument();
     expect(screen.getByText(/2,000 lines parsed · 0 unparsed/)).toBeInTheDocument();
     expect(screen.getByText(/detector 43f0560f…312d05/)).toBeInTheDocument();

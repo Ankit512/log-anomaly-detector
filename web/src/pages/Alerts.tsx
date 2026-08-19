@@ -11,6 +11,7 @@ import { sevVar, SEV_ORDER } from "@/lib/severity";
 import { SeverityBadge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { UnrecognizedBanner } from "@/components/UnrecognizedBanner";
 import { cn } from "@/lib/utils";
 
 const col = createColumnHelper<Finding>();
@@ -201,14 +202,7 @@ export function Alerts() {
 
   return (
     <div className="space-y-4">
-      {data.unrecognized && (
-        <Card className="border-dashed" style={{ borderColor: "var(--sev-medium)" }}>
-          <CardContent className="p-4 text-[12.5px] text-muted-foreground">
-            <b className="text-foreground">Log format not recognized — 0 lines parsed.</b>{" "}
-            No rule evaluated a single line, so this run is <b>not</b> evidence the log is clean.
-          </CardContent>
-        </Card>
-      )}
+      <UnrecognizedBanner state={data} />
 
       <div className="flex flex-wrap items-center gap-2">
         <Input

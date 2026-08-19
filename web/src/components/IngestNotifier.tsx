@@ -51,9 +51,11 @@ export function IngestNotifier() {
   const done = job?.done ?? 0;
   const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
 
+  // An unrecognized/empty run finished, but parsed nothing — a warning tone,
+  // never the green "success" check that would read as an all-clear.
   const tone =
     current.kind === "error" ? "var(--sev-critical)"
-    : current.kind === "done" ? "var(--sev-low)"
+    : current.kind === "done" ? (current.unrecognized ? "var(--sev-medium)" : "var(--sev-low)")
     : "hsl(var(--primary))";
 
   return (
@@ -63,7 +65,9 @@ export function IngestNotifier() {
     >
       <div className="flex items-start gap-2.5">
         <span className="mt-px flex-none" style={{ color: tone }}>
-          {current.kind === "done" ? <CheckCircle2 className="h-[18px] w-[18px]" />
+          {current.kind === "done"
+            ? (current.unrecognized ? <TriangleAlert className="h-[18px] w-[18px]" />
+                                     : <CheckCircle2 className="h-[18px] w-[18px]" />)
             : current.kind === "error" ? <TriangleAlert className="h-[18px] w-[18px]" />
             : <Loader2 className="h-[18px] w-[18px] animate-spin" />}
         </span>
