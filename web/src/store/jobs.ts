@@ -17,6 +17,9 @@ export interface IngestJob {
   job?: AnalyzeJob;       // last /api/progress snapshot, verbatim
   message?: string;       // human line for done/error
   runFile?: string | null; // the saved run to open from the completion toast
+  /** A finished run whose format was not parsed — a warning, not an error and
+   *  not a clean "0 findings". Drives the notifier's honest tone + copy. */
+  unrecognized?: boolean;
   startedAt: number;      // for an honest elapsed readout
   seen?: boolean;         // dismissed / acknowledged by the user
 }
@@ -75,9 +78,29 @@ export const useJobs = create<JobsState>((set, get) => {
     // toast can re-open it even if the user switched away.
     const runs = await api.runs().catch(() => null);
     const runFile = runs?.runs.find((r) => r.runId === runs.current)?.file ?? null;
-    set({ current: { ...base, kind: "done", job: final, runFile,
-      message: `${label} analyzed — ${final.findings ?? 0} finding(s)`
-        + (final.note ? ` · ${final.note}` : "") + "." } });
+
+    // Distinguish "nothing parsed" from "nothing found" — an unrecognized or
+    // empty run is NOT a clean 0-findings result, so it must not say "analyzed
+    // — 0 findings". The parse facts live in console_state, not the job.
+    const st = await api.consoleState().catch(() => null);
+    const findings = final.findings ?? st?.findings?.length ?? 0;
+    let message: string;
+    let unrecognized = false;
+    if (st?.unrecognized) {
+      unrecognized = true;
+      const total = (st.linesParsed ?? 0) + (st.linesUnparsed ?? 0);
+      message = `Couldn't parse ${label} — 0${total ? ` of ${total.toLocaleString()}` : ""} lines recognized (unsupported format).`;
+    } else if (st?.emptyInput) {
+      unrecognized = true;
+      message = `${label} had no analyzable content — nothing was read.`;
+    } else if (findings === 0) {
+      message = `${label} analyzed — 0 findings; nothing matched the rules.`;
+    } else {
+      message = `${label} analyzed — ${findings} finding(s).`;
+    }
+    if (final.note) message += ` · ${final.note}`;
+
+    set({ current: { ...base, kind: "done", job: final, runFile, unrecognized, message } });
   };
 
   return {

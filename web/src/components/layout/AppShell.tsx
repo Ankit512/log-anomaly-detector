@@ -12,6 +12,7 @@ import { RunDropdown } from "@/components/RunDropdown";
 import { IngestNotifier } from "@/components/IngestNotifier";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useJobs } from "@/store/jobs";
+import { isBlobPageUrl, rawFileUrl } from "@/lib/rawUrl";
 import { cn } from "@/lib/utils";
 
 /** The uniform v6 shell: every route renders inside this exact frame, so the
@@ -93,9 +94,13 @@ function UploadDialog({ open, onClose }: { open: boolean; onClose: () => void })
   const [mode, setMode] = useState<"file" | "link">("file");
   const [url, setUrl] = useState("");
 
+  // A repo "blob" URL is a web page, not the file — convert it to the raw URL
+  // so the fetch gets the log instead of 500 lines of HTML.
+  const isBlob = isBlobPageUrl(url);
+
   const submitUrl = () => {
-    const u = url.trim();
-    if (!u) return;
+    const u = rawFileUrl(url);
+    if (!u.trim()) return;
     startUrl(u);         // the notifier takes over; a bad URL is an honest error
     setUrl("");
     onClose();
@@ -148,6 +153,12 @@ function UploadDialog({ open, onClose }: { open: boolean; onClose: () => void })
               inputMode="url" autoComplete="off"
             />
           </label>
+          {isBlob && (
+            <p className="text-[11px]" style={{ color: "var(--sev-medium)" }}>
+              That’s a web-page link, not the raw file — we’ll fetch the raw
+              version instead: <span className="break-all font-mono">{rawFileUrl(url)}</span>
+            </p>
+          )}
           <p className="text-[11px] text-muted-foreground">
             The server fetches it (http/https only, public hosts, size- and
             text-gated) and runs the same analysis. A page that isn’t a text log

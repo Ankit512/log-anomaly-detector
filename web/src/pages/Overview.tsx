@@ -13,6 +13,7 @@ import { SeverityDonut } from "@/components/charts/SeverityDonut";
 import { AlertsOverTime } from "@/components/charts/AlertsOverTime";
 import { TacticBars } from "@/components/charts/TacticBars";
 import { AiAnalyst } from "@/components/AiAnalyst";
+import { UnrecognizedBanner } from "@/components/UnrecognizedBanner";
 import { useUi } from "@/store/ui";
 
 /** v6 compact KPI card: icon, colored label, count, and a delta line that is
@@ -110,9 +111,14 @@ const td = "border-b px-2.5 py-[11px] align-middle";
 
 export function Overview() {
   const { data, isLoading, error } = useQuery({ queryKey: ["overview"], queryFn: api.overview });
+  // The current run's parse facts (unrecognized / empty / line counts) live in
+  // console_state, not in /api/overview — needed to tell "nothing parsed" from
+  // "nothing found" honestly.
+  const { data: state } = useQuery({ queryKey: ["consoleState"], queryFn: api.consoleState });
   const setTimeWindow = useUi((s) => s.setTimeWindow);
 
   const overview = data && !("error" in data) ? (data as OverviewData) : null;
+  const unparsed = !!state && !state.idle && (!!state.unrecognized || !!state.emptyInput);
   useEffect(() => {
     if (overview?.timeWindowLabel) setTimeWindow(overview.timeWindowLabel);
   }, [overview?.timeWindowLabel, setTimeWindow]);
@@ -144,6 +150,16 @@ export function Overview() {
   const k = overview.kpis;
   return (
     <div className="flex flex-col gap-4">
+      {/* Honesty guardrail: an unrecognized / empty run must not read as an
+          all-clear. Show the banner FIRST, above the zero KPIs. */}
+      {unparsed && state && <UnrecognizedBanner state={state} />}
+      {unparsed && (
+        <p className="text-[12px] text-muted-foreground" style={{ color: "var(--sev-medium)" }}>
+          The counts below are all zero because <b>nothing was parsed</b>, not
+          because nothing was found. Open <Link className="underline" to="/alerts">Alerts</Link>{" "}
+          for the run details.
+        </p>
+      )}
       <div className="grid grid-cols-[repeat(auto-fit,minmax(148px,1fr))] gap-[9px]">
         <KpiCard label="Total Alerts" count={k.total} delta={k.deltas.total} icon={Bell} />
         <KpiCard label="Critical" count={k.critical} delta={k.deltas.critical} icon={OctagonAlert} color={sevVar("CRITICAL")} />
