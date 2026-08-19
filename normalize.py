@@ -37,6 +37,7 @@ import anomaly_detector as ad  # noqa: E402
 # upload, URL, adapter hydration) routes through one seam.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "console" / "formats"))
 import log360  # noqa: E402
+import logcat  # noqa: E402
 
 
 # "Mon DD HH:MM:SS host proc[pid]: message" — day may be space-padded ("Jul  3").
@@ -102,6 +103,16 @@ def _first_month(path):
     return None
 
 
+def _first_logcat_month(path):
+    """Month of the first Android logcat line, for the year-rollover comparison."""
+    with open(path, "r", errors="replace") as f:
+        for line in f:
+            m = logcat.LOGCAT_RE.match(line.rstrip("\n"))
+            if m:
+                return int(m.group("mon"))
+    return None
+
+
 def sniff_format(path, probe_lines=50):
     """Decide the format from the first non-blank lines. Ties go to canonical."""
     # Log360 shapes are sniffed first: their signatures (a CSV export header, a
@@ -110,6 +121,11 @@ def sniff_format(path, probe_lines=50):
     l360 = log360.sniff(path, probe_lines=probe_lines)
     if l360:
         return l360
+    # Android logcat's "MM-DD HH:MM:SS.mmm PID TID L TAG:" signature cannot be
+    # produced by a canonical, rfc3164, or Log360 line, and the sniff demands a
+    # clear majority match — so existing formats keep their exact prior behaviour.
+    if logcat.sniff(path, probe_lines=probe_lines):
+        return "logcat"
     canonical = rfc3164 = seen = 0
     with open(path, "r", errors="replace") as f:
         for line in f:
@@ -207,6 +223,16 @@ def load(path):
                     if line.strip() and n not in matched]
     elif fmt in ("log360_csv", "log360_syslog"):
         records, unparsed, total = log360.load(path, fmt)
+    elif fmt == "logcat":
+        # Android logcat omits the year, exactly like rfc3164: infer it from the
+        # file mtime, backing off one year when the log's first month is ahead
+        # of the mtime month (a log written last calendar year, touched this one).
+        year, mtime_month = infer_base_year(path)
+        first_month = _first_logcat_month(path)
+        if first_month and first_month > mtime_month:
+            year -= 1
+        base_year = year
+        records, unparsed, total = logcat.load(path, year)
     elif fmt == "rfc3164":
         year, mtime_month = infer_base_year(path)
         first_month = _first_month(path)

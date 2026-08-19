@@ -1116,6 +1116,82 @@ def check_log360():
     return 0 if all(results) else 1
 
 
+def check_logcat():
+    """Android logcat sibling-parser checks (console/formats/logcat.py).
+
+    The Android sample was 0-parsed/unrecognized before this format existed.
+    Asserts it now sniffs as logcat, parses every line into canonical records
+    with the levels/host/proc contract, keeps raw verbatim, and — the honesty
+    boundary — does NOT manufacture findings: a benign debug log stays benign.
+    No sockets, no model — normalize.load + detect only.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import normalize
+    from anomaly_detector import detect
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nAndroid logcat ingest (console/formats/logcat.py):")
+
+    sample = ROOT / "samples" / "Android_2k.log"
+    records, stats = normalize.load(sample)
+
+    check("Android sample sniffed as logcat", stats["format"] == "logcat", stats["format"])
+    check("every line parses, none unparsed (was 0-parsed/unrecognized before)",
+          stats["parsed"] == 2000 and stats["unparsed"] == 0,
+          f"parsed={stats['parsed']} unparsed={stats['unparsed']}")
+    check("parsed > 0 with unrecognized:false",
+          stats["parsed"] > 0 and stats["format"] != "unknown")
+
+    # Canonical record shape + envelope contract.
+    src_lines = sample.read_text().splitlines()
+    check("raw is the verbatim source line for every record",
+          all(r["raw"] == src_lines[r["n"] - 1] for r in records))
+
+    by_n = {r["n"]: r for r in records}
+    r = by_n[1]                        # "03-17 16:13:38.811  1702  2395 D WindowManager: ..."
+    check("ts parsed from the MM-DD HH:MM:SS.mmm stamp (year inferred, ms kept)",
+          str(r["ts"]) == "2026-03-17 16:13:38.811000+00:00", str(r["ts"]))
+    check("D level -> INFO", r["level"] == "INFO", r["level"])
+    check("logcat has no host -> host is None (not derived)", r["host"] is None, repr(r["host"]))
+    check("TAG -> proc, PID -> pid (mirrors rfc3164)",
+          r["proc"] == "WindowManager" and r["pid"] == "1702",
+          f"proc={r['proc']} pid={r['pid']}")
+    check("msg keeps original wording, tag stripped",
+          r["msg"].startswith("printFreezingDisplayLogs"), r["msg"][:30])
+
+    # Level mapping across the priorities the sample actually contains.
+    levels = {r["level"] for r in records}
+    check("levels drawn only from the detector's vocabulary",
+          levels <= {"INFO", "WARN", "ERROR", "CRIT"}, str(levels))
+    check("W lines map to WARN", any(r["level"] == "WARN" for r in records))
+    check("E lines map to ERROR", any(r["level"] == "ERROR" for r in records))
+
+    # Honesty boundary: parsing is enabled, findings are NOT manufactured. The
+    # sample is benign system debug logging; only 3 error lines exist (far under
+    # the 5-in-60s error-burst threshold), so few or no findings is CORRECT.
+    findings = detect(records)
+    check("no findings are fabricated from a benign debug log "
+          f"({len(findings)} finding(s) — few/none is the honest outcome)",
+          len(findings) <= 2, f"{len(findings)} findings")
+
+    # Regression: strict sniff never steals another format's file.
+    for name, want in (("sample-2.log", "canonical"),
+                       ("samples/Linux_2k.log", "rfc3164"),
+                       ("samples/log360_export.csv", "log360_csv")):
+        _, s = normalize.load(ROOT / name)
+        check(f"{name} still sniffs as {want} (logcat sniff didn't steal it)",
+              s["format"] == want, s["format"])
+
+    return 0 if all(results) else 1
+
+
 def check_remote_compute():
     """Remote-compute guardrails, with the outbound payload CAPTURED, not sent.
 
@@ -2131,17 +2207,18 @@ def main():
 
     routing = check_server_routing()
     log360 = check_log360()
+    logcat_ = check_logcat()
     remote = check_remote_compute()
     dashboard = check_dashboard_data()
     layout = check_layout_css()
     allruns = check_allruns()
     soc = check_soc_overview()
     subsystems = check_soc_subsystems()
-    if (result.returncode or routing or log360 or remote or dashboard or layout
-            or allruns or soc or subsystems):
+    if (result.returncode or routing or log360 or logcat_ or remote or dashboard
+            or layout or allruns or soc or subsystems):
         print("\nFAILED")
         return 1
-    print("\nPASSED — render + routing + log360 + remote-compute + dashboard-data "
+    print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems checks green")
     return 0
 
