@@ -960,10 +960,17 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         elif path == "/api/export":
             if STATE.get("idle"):
                 return self.send_error(409, "nothing to export yet")
-            body = export.build(STATE).encode()
-            name = f"{STATE.get('runId', 'run')}.html".replace("/", "_")
+            qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+            fmt = (qs.get("format") or ["html"])[0].lower()
+            try:
+                body, content_type, ext = export.serialize(STATE, fmt)
+            except KeyError:
+                return self.send_error(
+                    400, f"unknown export format: {fmt} "
+                         f"(use {'/'.join(sorted(export.SERIALIZERS))})")
+            name = f"{STATE.get('runId', 'run')}.{ext}".replace("/", "_")
             self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Type", content_type)
             self.send_header("Content-Disposition", f'attachment; filename="{name}"')
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
