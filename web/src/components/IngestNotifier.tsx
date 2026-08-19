@@ -43,7 +43,8 @@ export function IngestNotifier() {
       await queryClient.invalidateQueries();
     }
     dismiss();
-    navigate("/");
+    // An EVTX ingest lands in the store, so it points at History; a run points home.
+    navigate(current.viewPath ?? "/");
   };
 
   const job = current.job;
@@ -91,7 +92,7 @@ export function IngestNotifier() {
                 onClick={viewRun}
                 className="mt-2 rounded-md border border-primary bg-accent px-2.5 py-1 text-[11.5px] font-semibold text-accent-foreground hover:opacity-90"
               >
-                View run
+                {current.viewLabel ?? "View run"}
               </button>
             </>
           ) : current.kind === "error" ? (

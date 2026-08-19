@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Antenna, Bell, Cable, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
+  Antenna, Bell, Cable, Database, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
   Radar, RefreshCw, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,6 +30,8 @@ export const NAV = [
   // socf-ti-oem: TI enrichment (OTX/AbuseIPDB) + OEM/API polling.
   { to: "/enrichment", label: "Enrichment", icon: Search, ready: true },
   { to: "/oem", label: "OEM Engine", icon: Cable, ready: true },
+  // socf-evtx-history: EVTX ingest + persistent history/retention.
+  { to: "/history", label: "History", icon: Database, ready: true },
   { to: "/reports", label: "Reports", icon: FileText, ready: true },
   { to: "/cases", label: "Cases", icon: Folder, ready: true },
   // socf-syslog: live syslog collector control panel.
@@ -41,7 +43,7 @@ const TITLES: Record<string, string> = {
   "/": "SOC Dashboard", "/alerts": "Alerts", "/incidents": "Incidents",
   "/threat-intel": "Threat Intel", "/assets": "Assets",
   "/discovery": "Discovery", "/vulnerabilities": "Vulnerabilities",
-  "/enrichment": "Enrichment", "/oem": "OEM Engine",
+  "/enrichment": "Enrichment", "/oem": "OEM Engine", "/history": "History",
   "/reports": "Reports",
   "/cases": "Cases", "/collectors": "Collectors", "/settings": "Settings",
 };
@@ -93,7 +95,7 @@ function Sidebar() {
  *  runs the analysis as a BACKGROUND job and drives the persistent
  *  IngestNotifier — so the upload survives navigating away from the Overview. */
 const ACCEPTED_TITLE =
-  "Accepted: LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text. Analyzed locally by the rules engine; results open in Alerts";
+  "Accepted: LOG, TXT, CSV, TSV, JSON, XML, HTML, RAW — anything that reads as plain text. Analyzed locally by the rules engine; results open in Alerts. Windows EVTX (.evtx) is ingested into the persistent store and appears on the History page.";
 
 /** Two-mode ingest dialog: a local file OR a pasted public URL. Both feed the
  *  same background job store + IngestNotifier — the source is the only
@@ -102,7 +104,18 @@ const ACCEPTED_TITLE =
 function UploadDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const startUpload = useJobs((s) => s.startUpload);
   const startUrl = useJobs((s) => s.startUrl);
+  const startEvtx = useJobs((s) => s.startEvtx);
   const [mode, setMode] = useState<"file" | "link">("file");
+
+  // Split a selection: .evtx files ingest into the store (History), everything
+  // else runs the analyzer. Each path drives the same honest notifier.
+  const routeFiles = (files: FileList) => {
+    const all = Array.from(files);
+    const evtx = all.filter((f) => f.name.toLowerCase().endsWith(".evtx"));
+    const rest = all.filter((f) => !f.name.toLowerCase().endsWith(".evtx"));
+    if (rest.length) startUpload(rest);
+    if (evtx.length) startEvtx(evtx);
+  };
   const [url, setUrl] = useState("");
 
   // A repo "blob" URL is a web page, not the file — convert it to the raw URL
@@ -146,7 +159,7 @@ function UploadDialog({ open, onClose }: { open: boolean; onClose: () => void })
               type="file" multiple className="hidden" data-testid="ingest-file"
               aria-label="Upload logs"
               onChange={(e) => {
-                if (e.target.files?.length) { startUpload(e.target.files); onClose(); }
+                if (e.target.files?.length) { routeFiles(e.target.files); onClose(); }
                 e.target.value = "";
               }}
             />
