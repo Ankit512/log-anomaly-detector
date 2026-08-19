@@ -59,6 +59,7 @@ import redact  # noqa: E402
 import soc  # noqa: E402
 import store  # noqa: E402  # persistent SOC Command Center store (console/store.py)
 import syslog_collector  # noqa: E402  # live syslog listener -> store (socf-syslog)
+import discovery  # noqa: E402  # nmap discovery + vuln scan -> store (socf-discovery)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -1026,6 +1027,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # --- live syslog collector (socf-syslog; console/syslog_collector.py)
         elif path == "/api/syslog/status":
             self._json(syslog_collector.COLLECTOR.status())
+        # --- nmap network discovery + vuln scan (socf-discovery) ------------
+        elif path == "/api/discovery/status":
+            self._json(discovery.SCANNER.status())
         elif path.startswith("/api/"):
             # An unknown /api path is a real 404 — never fall through to the SPA
             # (that would return HTML for a missing endpoint and mask the bug).
@@ -1116,6 +1120,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._syslog_start()
         elif path == "/api/syslog/stop":
             self._json(syslog_collector.COLLECTOR.stop())
+        # --- nmap network discovery + vuln scan (socf-discovery) -----------
+        elif path == "/api/discovery/scan":
+            self._discovery_scan()
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
 
@@ -1216,6 +1223,30 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # A bind that failed is a client-actionable error (bad port / in use /
         # privileged) — surface it as 400 with the honest reason, not a fake OK.
         return self._json(status, 200 if status.get("running") else 400)
+
+    # -----------------------------------------------------------------------
+    # nmap discovery + vuln scan (socf-discovery; console/discovery.py). This
+    # is a dual-use tool, so the guardrails are enforced here: every scan is
+    # user-initiated (there is no auto/timer path), ONLY private/loopback/
+    # link-local targets are accepted (authorized_target refuses public or
+    # publicly-resolving targets with an honest 400), and when nmap is not
+    # installed we return an honest error — never a simulated result. Real
+    # results land in the store; read them back via /api/store/{assets,vulns}.
+    # -----------------------------------------------------------------------
+    def _discovery_scan(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._json({"error": "invalid JSON body"}, 400)
+        if not isinstance(payload, dict):
+            return self._json({"error": "body must be a JSON object"}, 400)
+
+        store.init_db()
+        target = payload.get("target", "")
+        vuln = bool(payload.get("vuln", False))
+        status, code = discovery.SCANNER.start(target, vuln)
+        return self._json(status, code)
 
     do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
 
