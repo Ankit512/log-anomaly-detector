@@ -29,10 +29,12 @@ Stdlib only. (cgi is gone in 3.13, so multipart is parsed with email.parser.)
 
 import argparse
 import http.server
+import ipaddress
 import json
 import os
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -637,13 +639,40 @@ def resolve_sample(value):
     return ROOT / value
 
 
-def fetch_url(url, dest_dir):
-    """Download PUBLIC test data to a temp file. Never uploads anything."""
+def validate_public_url(url):
+    """Reject anything that is not a plain PUBLIC http(s) URL, so a pasted link
+    cannot be turned into a server-side request against the loopback interface,
+    the cloud metadata endpoint, or the local network (SSRF). Returns the parsed
+    URL on success; raises ValueError (→ honest 400) otherwise.
+
+    Every address the host resolves to must be globally routable — a hostname
+    that resolves to ANY private/loopback/link-local/reserved address is
+    refused. (There is a small TOCTOU window between this check and the fetch;
+    for a localhost single-user console fetching public test logs that is an
+    acceptable MVP posture, and the size/text gates still apply.)"""
     parsed = urllib.parse.urlparse(url)
     if parsed.scheme not in ("http", "https"):
         raise ValueError("only http(s) URLs can be fetched")
-    if not parsed.netloc:
+    host = parsed.hostname
+    if not host:
         raise ValueError("that does not look like a URL")
+    try:
+        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
+                                   proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        raise ValueError(f"could not resolve host {host!r}")
+    for info in infos:
+        ip = ipaddress.ip_address(info[4][0])
+        if not ip.is_global or ip.is_multicast:
+            raise ValueError(
+                "that URL points at a private, loopback, or link-local address — "
+                "only public log URLs can be fetched")
+    return parsed
+
+
+def fetch_url(url, dest_dir):
+    """Download PUBLIC test data to a temp file. Never uploads anything."""
+    parsed = validate_public_url(url)
 
     req = urllib.request.Request(url, headers={"User-Agent": "log-analyzer-console/1.0"})
     with urllib.request.urlopen(req, timeout=DOWNLOAD_TIMEOUT) as resp:
@@ -1069,8 +1098,12 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
                 compare = (fields.get("compare", (None, b""))[1] or b"") in (b"1", b"true", b"on")
             else:
                 payload = json.loads(body or b"{}")
-                source = payload.get("source")
-                value = payload.get("value")
+                # {"url": "..."} is a shorthand for {"source":"url","value":"..."}.
+                if payload.get("url") and not payload.get("source"):
+                    source, value = "url", payload["url"]
+                else:
+                    source = payload.get("source")
+                    value = payload.get("value")
                 compare = bool(payload.get("compare"))
                 filename = data = None
         except (ValueError, json.JSONDecodeError) as e:
@@ -1078,6 +1111,15 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
 
         print(f"\n  analyze: source={source} value={str(value)[:70]!r} compare={compare}",
               flush=True)
+
+        # Validate a pasted URL synchronously so an obviously-bad link (wrong
+        # scheme, unresolvable, or an SSRF target) is an immediate honest 400
+        # rather than a background job that only fails on poll.
+        if source == "url":
+            try:
+                validate_public_url(str(value or ""))
+            except ValueError as e:
+                return self._json({"error": str(e)}, 400)
 
         if job_snapshot().get("status") == "running":
             return self._json({"error": "an analysis is already running"}, 409)

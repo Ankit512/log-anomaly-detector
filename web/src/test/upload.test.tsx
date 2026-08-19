@@ -22,6 +22,7 @@ describe("header upload -> /api/analyze -> /api/progress", () => {
     renderApp(<App />);
     await screen.findByText("Total Alerts");
 
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
     expect(await screen.findByText(/server\.csv analyzed — 24 finding\(s\)/, undefined,
       { timeout: 5000 })).toBeInTheDocument();
@@ -38,6 +39,7 @@ describe("header upload -> /api/analyze -> /api/progress", () => {
     renderApp(<App />);
     await screen.findByText("Total Alerts");
 
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
     expect(await screen.findByText(/Analysis of server\.csv failed: analysis failed: unreadable input/,
       undefined, { timeout: 5000 })).toBeInTheDocument();
@@ -60,6 +62,7 @@ describe("header upload -> /api/analyze -> /api/progress", () => {
     renderApp(<App />);
     await screen.findByText("Total Alerts");
 
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
 
     // A real progressbar with the backend's own done/total, never a fake bar.
@@ -80,6 +83,7 @@ describe("header upload -> /api/analyze -> /api/progress", () => {
     renderApp(<App />);
     await screen.findByText("Total Alerts");
 
+    await userEvent.click(screen.getByRole("button", { name: /upload logs/i }));
     await userEvent.upload(screen.getByTestId("ingest-file"), file);
     expect(await screen.findByText(/did not accept server\.csv/)).toBeInTheDocument();
   });

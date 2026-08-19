@@ -28,6 +28,8 @@ interface JobsState {
   current: IngestJob | null;
   busy: boolean;
   startUpload: (files: FileList | File[], now?: number) => Promise<void>;
+  /** Ingest a pasted URL — the backend fetches it and runs the same pipeline. */
+  startUrl: (url: string, now?: number) => Promise<void>;
   dismiss: () => void;
   /** test-only reset so the module-global store doesn't leak across cases. */
   _reset: () => void;
@@ -35,58 +37,85 @@ interface JobsState {
 
 let counter = 0;
 
-export const useJobs = create<JobsState>((set, get) => ({
-  current: null,
-  busy: false,
+export const useJobs = create<JobsState>((set, get) => {
+  /** Run one ingestion end-to-end: kick it off (upload OR URL), then poll
+   *  /api/progress to the real outcome. The ONLY difference between a file and
+   *  a link is `kick` and the label — progress, completion, click-to-view and
+   *  honest errors are identical. */
+  const runOne = async (label: string, startingKind: IngestKind,
+                        kick: () => Promise<{ ok: boolean; error?: string }>, now: number) => {
+    const id = ++counter;
+    const base: IngestJob = { id, file: label, kind: startingKind, startedAt: now };
+    set({ current: base });
 
-  startUpload: async (files, now = Date.now()) => {
-    const list = Array.from(files);
-    if (!list.length || get().busy) return;
-    set({ busy: true });
-    try {
-      // One analysis at a time (backend enforces it): sequential, last wins.
-      for (const file of list) {
-        const id = ++counter;
-        const base: IngestJob = { id, file: file.name, kind: "uploading", startedAt: now };
-        set({ current: base });
-
-        const out = await api.analyzeUpload(file)
-          .catch(() => ({ ok: false as const, error: "the backend is not reachable" }));
-        if (!out.ok) {
-          set({ current: { ...base, kind: "error",
-            message: `The server did not accept ${file.name}${out.error ? `: ${out.error}` : ""}.` } });
-          continue;
-        }
-
-        let final: AnalyzeJob | { status: "error"; error: string } | null = null;
-        for (let i = 0; i < PROGRESS_POLL_MAX; i++) {
-          await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
-          const snap = await api.progress().catch(() => null);
-          if (!snap) { final = { status: "error", error: "the backend stopped answering" }; break; }
-          if (snap.status !== "running") { final = snap; break; }
-          set({ current: { ...base, kind: "running", job: snap } });
-        }
-        if (!final) final = { status: "error", error: "timed out waiting for the analysis" };
-
-        if (final.status === "error") {
-          set({ current: { ...base, kind: "error",
-            message: `Analysis of ${file.name} failed: ${final.error ?? "unknown error"}` } });
-          continue;
-        }
-
-        // The finished run is the current one; capture its file so the
-        // completion toast can re-open it even if the user switched away.
-        const runs = await api.runs().catch(() => null);
-        const runFile = runs?.runs.find((r) => r.runId === runs.current)?.file ?? null;
-        set({ current: { ...base, kind: "done", job: final, runFile,
-          message: `${file.name} analyzed — ${final.findings ?? 0} finding(s)`
-            + (final.note ? ` · ${final.note}` : "") + "." } });
-      }
-    } finally {
-      set({ busy: false });
+    const out = await kick().catch(() => ({ ok: false as const, error: "the backend is not reachable" }));
+    if (!out.ok) {
+      set({ current: { ...base, kind: "error",
+        message: `The server did not accept ${label}${out.error ? `: ${out.error}` : ""}.` } });
+      return;
     }
-  },
 
-  dismiss: () => set((s) => (s.current ? { current: { ...s.current, seen: true } } : {})),
-  _reset: () => set({ current: null, busy: false }),
-}));
+    let final: AnalyzeJob | { status: "error"; error: string } | null = null;
+    for (let i = 0; i < PROGRESS_POLL_MAX; i++) {
+      await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
+      const snap = await api.progress().catch(() => null);
+      if (!snap) { final = { status: "error", error: "the backend stopped answering" }; break; }
+      if (snap.status !== "running") { final = snap; break; }
+      set({ current: { ...base, kind: "running", job: snap } });
+    }
+    if (!final) final = { status: "error", error: "timed out waiting for the analysis" };
+
+    if (final.status === "error") {
+      set({ current: { ...base, kind: "error",
+        message: `Analysis of ${label} failed: ${final.error ?? "unknown error"}` } });
+      return;
+    }
+
+    // The finished run is the current one; capture its file so the completion
+    // toast can re-open it even if the user switched away.
+    const runs = await api.runs().catch(() => null);
+    const runFile = runs?.runs.find((r) => r.runId === runs.current)?.file ?? null;
+    set({ current: { ...base, kind: "done", job: final, runFile,
+      message: `${label} analyzed — ${final.findings ?? 0} finding(s)`
+        + (final.note ? ` · ${final.note}` : "") + "." } });
+  };
+
+  return {
+    current: null,
+    busy: false,
+
+    startUpload: async (files, now = Date.now()) => {
+      const list = Array.from(files);
+      if (!list.length || get().busy) return;
+      set({ busy: true });
+      try {
+        // One analysis at a time (backend enforces it): sequential, last wins.
+        for (const file of list) {
+          await runOne(file.name, "uploading", () => api.analyzeUpload(file), now);
+        }
+      } finally {
+        set({ busy: false });
+      }
+    },
+
+    startUrl: async (url, now = Date.now()) => {
+      const trimmed = url.trim();
+      if (!trimmed || get().busy) return;
+      set({ busy: true });
+      try {
+        // Label by the URL's last path segment, falling back to the host.
+        let label = trimmed;
+        try {
+          const u = new URL(trimmed);
+          label = u.pathname.split("/").filter(Boolean).pop() || u.hostname;
+        } catch { /* not a parseable URL — the backend returns an honest 400 */ }
+        await runOne(label, "uploading", () => api.analyzeUrl(trimmed), now);
+      } finally {
+        set({ busy: false });
+      }
+    },
+
+    dismiss: () => set((s) => (s.current ? { current: { ...s.current, seen: true } } : {})),
+    _reset: () => set({ current: null, busy: false }),
+  };
+});
