@@ -273,8 +273,8 @@ export function Collectors() {
   });
 
   return (
-    <div className="flex max-w-2xl flex-col gap-4">
-      <p className="text-[12.5px] text-muted-foreground">
+    <div className="flex flex-col gap-4">
+      <p className="max-w-3xl text-[12.5px] text-muted-foreground">
         A live syslog collector: point network devices, Linux/Windows agents, or a
         relay at it and their messages stream into the persistent store in real
         time. Everything shown here is the real listener state — never a fake
@@ -285,8 +285,13 @@ export function Collectors() {
           Backend not reachable — start the console server to control the collector.
         </p>
       )}
-      <Controls status={status} />
-      <LiveStatus status={status} />
+      {/* Config and live status sit side by side on wide screens (so the page
+          fills its width) and stack on narrow ones. items-start keeps each card
+          its natural height instead of stretching to match the taller one. */}
+      <div className="grid gap-4 lg:grid-cols-2 lg:items-start">
+        <Controls status={status} />
+        <LiveStatus status={status} />
+      </div>
       <RecentEvents running={!!status?.running} />
     </div>
   );
