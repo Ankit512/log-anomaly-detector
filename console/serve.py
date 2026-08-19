@@ -60,6 +60,7 @@ import soc  # noqa: E402
 import store  # noqa: E402  # persistent SOC Command Center store (console/store.py)
 import syslog_collector  # noqa: E402  # live syslog listener -> store (socf-syslog)
 import discovery  # noqa: E402  # nmap discovery + vuln scan -> store (socf-discovery)
+import ti_oem  # noqa: E402  # TI enrichment (OTX/AbuseIPDB) + OEM polling (socf-ti-oem)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -1030,6 +1031,11 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # --- nmap network discovery + vuln scan (socf-discovery) ------------
         elif path == "/api/discovery/status":
             self._json(discovery.SCANNER.status())
+        # --- TI enrichment + OEM polling (socf-ti-oem) ----------------------
+        elif path == "/api/ti/keys":
+            self._json(ti_oem.ti_key_status())
+        elif path == "/api/oem/connectors":
+            self._json({"connectors": ti_oem.list_connectors()})
         elif path.startswith("/api/"):
             # An unknown /api path is a real 404 — never fall through to the SPA
             # (that would return HTML for a missing endpoint and mask the bug).
@@ -1123,6 +1129,13 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # --- nmap network discovery + vuln scan (socf-discovery) -----------
         elif path == "/api/discovery/scan":
             self._discovery_scan()
+        # --- TI enrichment + OEM polling (socf-ti-oem) ---------------------
+        elif path == "/api/ti/enrich":
+            self._ti_enrich()
+        elif path == "/api/oem/connectors":
+            self._oem_create_connector()
+        elif path == "/api/oem/poll":
+            self._oem_poll()
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
 
@@ -1247,6 +1260,67 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         vuln = bool(payload.get("vuln", False))
         status, code = discovery.SCANNER.start(target, vuln)
         return self._json(status, code)
+
+    # -----------------------------------------------------------------------
+    # TI enrichment + OEM polling (socf-ti-oem; console/ti_oem.py). All API keys
+    # and vendor tokens are USER-SUPPLIED and stored secret-masked — a read only
+    # reveals presence (hasKey/hasToken), never the value. Verdicts/severity
+    # come from the provider's / vendor's real response, never keyword-guessed.
+    # A missing key or a failed call is an honest state, never a fabricated hit.
+    # Enter TI keys via POST /api/store/settings (otx_api_key/abuseipdb_api_key).
+    # -----------------------------------------------------------------------
+    def _read_json_body(self):
+        """Read a JSON object body, or None after sending a 400 error."""
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            self._json({"error": "invalid JSON body"}, 400)
+            return None
+        if not isinstance(payload, dict):
+            self._json({"error": "body must be a JSON object"}, 400)
+            return None
+        return payload
+
+    def _ti_enrich(self):
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        store.init_db()
+        ip = payload.get("ip", "")
+        result = ti_oem.enrich_ip(ip)
+        # An invalid IP is a client error; a valid IP with no provider errors is
+        # a 200 even when every provider is unconfigured (an honest empty result).
+        return self._json(result, 400 if result.get("error") else 200)
+
+    def _oem_create_connector(self):
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        store.init_db()
+        try:
+            view = ti_oem.create_connector(
+                payload.get("name", ""),
+                payload.get("config", {}) or {},
+                enabled=payload.get("enabled"),
+                interval=payload.get("interval"),
+                token=payload.get("token"),
+            )
+        except ValueError as exc:
+            return self._json({"error": str(exc)}, 400)
+        return self._json(view)
+
+    def _oem_poll(self):
+        payload = self._read_json_body()
+        if payload is None:
+            return
+        store.init_db()
+        name = (payload.get("name") or "").strip()
+        if not name:
+            return self._json({"error": "connector name is required"}, 400)
+        if ti_oem.connector_view(name) is None:
+            return self._json({"error": "unknown connector"}, 404)
+        return self._json(ti_oem.poll_connector(name))
 
     do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
 
@@ -1658,6 +1732,10 @@ def main():
 
     global STATE, CURRENT_RUN_FILE
     store.init_db()   # ensure the SOC Command Center store exists before serving
+    # OEM poller (socf-ti-oem): polls each ENABLED, configured connector on its
+    # interval. Idle until the user enables one; a placeholder base URL is never
+    # called. Runs as a daemon thread, so it dies with the process.
+    ti_oem.POLLER.start()
     with tempfile.TemporaryDirectory(prefix="anomaly-console-") as tmp:
         WORKDIR = tmp
         try:
@@ -1730,6 +1808,7 @@ def main():
         except KeyboardInterrupt:
             print("\n  stopped.")
         finally:
+            ti_oem.POLLER.stop()
             shutil.rmtree(STATE_FILE.parent / "__pycache__", ignore_errors=True)
 
 

@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Antenna, Bell, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
-  Radar, RefreshCw, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert, Upload,
+  Antenna, Bell, Cable, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
+  Radar, RefreshCw, Search, Settings, Shield, ShieldAlert, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
@@ -27,6 +27,9 @@ export const NAV = [
   // socf-discovery: nmap network discovery + vulnerability scanning.
   { to: "/discovery", label: "Discovery", icon: Radar, ready: true },
   { to: "/vulnerabilities", label: "Vulnerabilities", icon: ShieldAlert, ready: true },
+  // socf-ti-oem: TI enrichment (OTX/AbuseIPDB) + OEM/API polling.
+  { to: "/enrichment", label: "Enrichment", icon: Search, ready: true },
+  { to: "/oem", label: "OEM Engine", icon: Cable, ready: true },
   { to: "/reports", label: "Reports", icon: FileText, ready: true },
   { to: "/cases", label: "Cases", icon: Folder, ready: true },
   // socf-syslog: live syslog collector control panel.
@@ -38,6 +41,7 @@ const TITLES: Record<string, string> = {
   "/": "SOC Dashboard", "/alerts": "Alerts", "/incidents": "Incidents",
   "/threat-intel": "Threat Intel", "/assets": "Assets",
   "/discovery": "Discovery", "/vulnerabilities": "Vulnerabilities",
+  "/enrichment": "Enrichment", "/oem": "OEM Engine",
   "/reports": "Reports",
   "/cases": "Cases", "/collectors": "Collectors", "/settings": "Settings",
 };
