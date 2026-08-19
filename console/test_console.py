@@ -2670,6 +2670,153 @@ def check_syslog():
     return 0 if all(results) else 1
 
 
+def check_discovery():
+    """nmap discovery + vuln scan (console/discovery.py + /api/discovery/*).
+
+    Unit level: the authorization gate accepts ONLY private/loopback/link-local
+    targets and refuses public IPs (and hostnames that resolve to public IPs);
+    XML parsing derives a vuln's severity from the NSE-reported CVSS band (never
+    keyword-guessed) and excludes down hosts. Behaviour level: a scan against a
+    public target is an honest 400 refusal, an absent nmap is an honest error
+    (never a simulated result), and a real loopback scan (when nmap is present)
+    stores a real asset. Runs against a temp store DB.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import time
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import store
+    import discovery
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nnmap discovery + vuln scan (console/discovery.py + /api/discovery/*):")
+
+    real = (store.SOC_DIR, store.DB_PATH)
+    real_nmap = discovery.nmap_path
+    try:
+        with tempfile.TemporaryDirectory(prefix="discovery-test-") as tmp:
+            store.SOC_DIR = Path(tmp)
+            store.DB_PATH = Path(tmp) / "soc_history.db"
+            store.init_db()
+
+            # --- unit: the authorization gate --------------------------------
+            gate_ok = all(discovery.authorized_target(t) for t in
+                          ("127.0.0.1", "10.0.0.5", "192.168.1.0/24", "172.16.5.5",
+                           "169.254.1.1", "localhost"))
+            check("authorized_target ACCEPTS private/loopback/link-local targets", gate_ok)
+            gate_refuse = not any(discovery.authorized_target(t) for t in
+                                  ("8.8.8.8", "1.1.1.1", "93.184.216.34", "", "not a host"))
+            check("authorized_target REFUSES public/invalid targets", gate_refuse)
+            # example.com resolves to public IPs -> a hostname resolving public is refused.
+            check("authorized_target REFUSES a hostname that resolves to a public IP",
+                  discovery.authorized_target("example.com") is False)
+
+            # --- unit: XML parsing, severity from NSE CVSS -------------------
+            xml = (
+                '<?xml version="1.0"?><nmaprun>'
+                '<host><status state="up"/>'
+                '<address addr="192.168.1.10" addrtype="ipv4"/>'
+                '<address addr="AA:BB:CC:DD:EE:FF" addrtype="mac" vendor="Acme"/>'
+                '<hostnames><hostname name="box.local"/></hostnames>'
+                '<ports><port protocol="tcp" portid="443"><state state="open"/>'
+                '<service name="https" product="nginx" version="1.18"/>'
+                '<script id="vulners" output="CVE-2021-23017 9.8 x&#10;CVE-2019-1234 5.0 y"/>'
+                '</port></ports></host>'
+                '<host><status state="down"/><address addr="192.168.1.11" addrtype="ipv4"/></host>'
+                '</nmaprun>')
+            assets, vulns = discovery.parse_nmap_xml(xml)
+            check("parse_nmap_xml keeps only up hosts (down host excluded)",
+                  len(assets) == 1 and assets[0]["ip"] == "192.168.1.10", str(assets))
+            check("parsed asset carries hostname/mac/vendor/ports",
+                  assets[0]["hostname"] == "box.local" and assets[0]["mac"] == "AA:BB:CC:DD:EE:FF"
+                  and "443/tcp:https" in assets[0]["ports"], str(assets[0]))
+            by_cve = {v["cve"]: v for v in vulns}
+            check("vuln severity is the NSE CVSS band (9.8 -> CRITICAL, 5.0 -> MEDIUM)",
+                  by_cve.get("CVE-2021-23017", {}).get("severity") == "CRITICAL"
+                  and by_cve.get("CVE-2019-1234", {}).get("severity") == "MEDIUM", str(by_cve))
+            # A bare CVE with no adjacent CVSS gets an empty (unknown) severity,
+            # never a keyword-guessed one.
+            _, bare = discovery.parse_nmap_xml(
+                '<nmaprun><host><status state="up"/>'
+                '<address addr="10.0.0.1" addrtype="ipv4"/>'
+                '<ports><port protocol="tcp" portid="80"><state state="open"/>'
+                '<script id="http-vuln" output="see CVE-2020-9999 for details"/>'
+                '</port></ports></host></nmaprun>')
+            check("a CVE with no NSE CVSS -> empty (honest unknown) severity",
+                  len(bare) == 1 and bare[0]["cve"] == "CVE-2020-9999" and bare[0]["severity"] == "",
+                  str(bare))
+
+            # --- behaviour: HTTP routes -------------------------------------
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            hport = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{hport}{path}") as r:
+                    return r.status, json.loads(r.read())
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{hport}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            s_status, body = get("/api/discovery/status")
+            check("GET /api/discovery/status returns the real scanner shape",
+                  s_status == 200 and set(body) >= {"running", "target", "nmapInstalled", "vuln"})
+
+            # A public target is refused with an honest 400 — never scanned.
+            s_pub, pub = post("/api/discovery/scan", {"target": "8.8.8.8"})
+            check("POST /api/discovery/scan REFUSES a public target -> 400 honest error",
+                  s_pub == 400 and pub.get("error") == discovery.UNAUTHORIZED_MSG, str(pub))
+
+            # nmap absent -> honest error, never a fake/simulated scan result.
+            discovery.nmap_path = lambda: None
+            s_no, no = post("/api/discovery/scan", {"target": "127.0.0.1"})
+            check("POST /api/discovery/scan with nmap absent -> 400 honest 'needs nmap' error",
+                  s_no == 400 and no.get("error") == discovery.NMAP_ABSENT_MSG, str(no))
+            discovery.nmap_path = real_nmap
+
+            # A real loopback scan (only when nmap is installed) stores a real
+            # asset — the honest end-to-end path. Skipped honestly otherwise.
+            if discovery.nmap_path() is not None:
+                s_run, run = post("/api/discovery/scan", {"target": "127.0.0.1"})
+                check("POST /api/discovery/scan on a private target starts (200)",
+                      s_run == 200 and run.get("running") is True, str(run))
+                deadline = time.time() + 60
+                while discovery.SCANNER.status()["running"] and time.time() < deadline:
+                    time.sleep(0.2)
+                st = discovery.SCANNER.status()
+                q = store.query("assets", filters={"source": "nmap"})
+                check("a real loopback scan stores at least one real asset",
+                      st["running"] is False and not st["error"] and q["total"] >= 1,
+                      f"status={st} assets={q['total']}")
+            else:
+                print("  [SKIP] nmap not installed — end-to-end store path not exercised "
+                      "(the honest nmap-absent error is verified above)")
+
+            srv.shutdown()
+    finally:
+        discovery.nmap_path = real_nmap
+        store.SOC_DIR, store.DB_PATH = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2718,14 +2865,15 @@ def main():
     react = check_serve_react()
     store_ = check_store()
     syslog_ = check_syslog()
+    discovery_ = check_discovery()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
             or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_):
+            or syslog_ or discovery_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog checks green")
+          "+ syslog + discovery checks green")
     return 0
 
 

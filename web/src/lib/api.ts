@@ -286,6 +286,71 @@ export interface StoreEventsPage {
   offset: number;
 }
 
+// --- nmap discovery + vuln scan (socf-discovery) ---
+// The REAL state of the scanner. This is a dual-use tool: only private/
+// loopback/link-local targets are ever accepted (the backend refuses a public
+// or publicly-resolving target with an honest 400), every scan is user-
+// initiated, and when nmap is not installed the backend returns an honest
+// error — never a simulated result. Results land in the persistent store and
+// are read back through /api/store/{assets,vulns}.
+export interface DiscoveryStatus {
+  running: boolean;
+  target: string;
+  vuln: boolean;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string;
+  hostsFound: number;
+  assetsStored: number;
+  vulnsStored: number;
+  nmapInstalled: boolean;
+}
+export interface DiscoveryScanInput {
+  target: string;
+  vuln?: boolean;
+}
+
+// One row from the store's `assets` table — a host nmap actually observed.
+export interface StoreAsset {
+  id: number;
+  ts: string;
+  ip: string;
+  hostname: string;
+  mac: string;
+  vendor: string;
+  os: string;
+  ports: string;
+  source: string;
+  status: string;
+}
+export interface StoreAssetsPage {
+  items: StoreAsset[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+// One row from the store's `vulnerabilities` table. `severity` is derived from
+// the NSE-reported CVSS band (empty when NSE gave no score) — never guessed.
+export interface StoreVuln {
+  id: number;
+  ts: string;
+  asset_ip: string;
+  name: string;
+  cve: string;
+  severity: string;
+  cvss: number;
+  details: string;
+  source: string;
+  status: string;
+}
+export interface StoreVulnsPage {
+  items: StoreVuln[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -498,4 +563,33 @@ export const api = {
     return res.ok ? { ok: true, status: body as SyslogStatus }
                   : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
   },
+
+  // --- nmap discovery + vuln scan (socf-discovery) ---
+  // Poll the REAL scanner state; launch a scan (always user-initiated). A
+  // refused target (public / not private) or a missing nmap comes back as an
+  // honest error, never a fake OK. Discovered assets/vulns are read back from
+  // the persistent store.
+  discoveryStatus: () => getJson<DiscoveryStatus>("/api/discovery/status"),
+
+  discoveryScan: async (
+    input: DiscoveryScanInput,
+  ): Promise<{ ok: boolean; status?: DiscoveryStatus; error?: string }> => {
+    const res = await fetch("/api/discovery/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, status: body as DiscoveryStatus }
+                  : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  },
+
+  /** Discovered hosts from the persistent store (assets table), newest first. */
+  discoveryAssets: (limit = 100) =>
+    getJson<StoreAssetsPage>(`/api/store/assets?source=nmap&limit=${limit}`),
+
+  /** Vulnerabilities from the persistent store, newest first. Severity is the
+   *  NSE-reported CVSS band (empty = unknown), never keyword-guessed. */
+  vulns: (limit = 200) =>
+    getJson<StoreVulnsPage>(`/api/store/vulns?limit=${limit}`),
 };
