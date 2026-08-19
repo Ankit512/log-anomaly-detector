@@ -91,24 +91,37 @@ Three deliberate choices shape the whole project, and they are all about trust a
 
 ## Where the project stands today
 
-The work is planned in three phases. Two are complete:
+The work is planned in three phases. The first two are complete, and the third is well underway:
 
 - **Phase 1** — reading a log and summarizing it with the local AI. Done.
 - **Phase 2** — spotting anomalies with the rules-plus-AI approach above. Done, and working
   on real-world logs (not just neat test samples), with an automated test suite that guards
   every future change against accidental breakage.
-- **Phase 3** — a fuller operations platform. Started: an optional threat-intelligence step
-  now recognizes known-bad addresses and maps them to known attacker techniques. The rest
-  (running continuously, tracing root causes, and — only with human approval — helping fix
-  problems) is planned.
+- **Phase 3** — a fuller operations platform. Well underway: there is now a proper
+  **security dashboard** you open in a browser (details below), it reads several real-world
+  log styles (ordinary system logs, secure-shell logs, a popular security-product export, and
+  Android phone logs), and an optional step recognizes known-bad addresses and maps them to
+  known attacker techniques. The rest (running continuously and — only with human approval —
+  helping fix problems) is still planned.
 
-There is also now a **review screen you open in a browser**: one command turns a log into a
-tidy page of findings, ranked by seriousness, each with the exact evidence and a plain-English
-explanation — and it can show, side by side, what the AI *alone* would have said versus what
-the reliable rules concluded. It runs entirely on your own machine; nothing is uploaded.
+There are two ways to look at the results, both on your own machine, nothing uploaded:
+
+- **A simple review page** — one command turns a log into a tidy page of findings, ranked by
+  seriousness, each with the exact evidence and a plain-English explanation. It can also show,
+  side by side, what the AI *alone* would have said versus what the reliable rules concluded.
+- **A full security dashboard** — a modern control-room screen with several sections: an
+  **Overview** (the big picture — how many alerts, how serious, over what time), **Alerts**
+  (every finding), **Incidents** (related findings grouped into one event you can walk through
+  its lifecycle — new, acknowledged, investigating, resolved), **Assets** (which machines and
+  user accounts actually showed up, and which are at risk), **Threat Intel** (known-bad
+  addresses and attacker techniques), and **Reports** (save or download the whole run as a
+  file — a spreadsheet, a web page, or a data file — to share or archive).
+
+Every panel follows one rule: show real information drawn from the log, or honestly say there
+is nothing yet — it never invents a number to fill a space.
 
 In short: the core — reliably spotting and explaining trouble in real logs — is built,
-tested, documented, and now has a friendly screen to review it in.
+tested, documented, and now has both a quick review page and a full dashboard to work in.
 
 ## The bigger vision
 
