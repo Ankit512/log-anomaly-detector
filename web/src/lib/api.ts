@@ -278,6 +278,13 @@ export interface StoreEvent {
   severity: string;
   message: string;
   raw: string;
+  // Present on the full events read (History page); optional so the syslog
+  // panel's narrower use keeps type-checking.
+  category?: string;
+  event_id?: string;
+  user?: string;
+  dst_ip?: string;
+  action?: string;
 }
 export interface StoreEventsPage {
   items: StoreEvent[];
@@ -405,6 +412,31 @@ export interface OemConnectorInput {
 }
 export interface OemPollResult {
   name: string; ok: boolean; stored: number; error: string;
+}
+
+// --- EVTX ingest + history/retention (socf-evtx-history) ---
+// Command-Center KPI counts from store.metrics(). `critical`/`high` count
+// SOURCE-REPORTED severities, not anomaly verdicts — label them as such.
+export interface StoreMetrics {
+  events: number; critical: number; high: number;
+  assets: number; openVulns: number; iocHits: number;
+}
+
+/** Public settings view: non-secret values, plus which secret keys are set. */
+export interface PublicSettings {
+  settings: Record<string, string>;
+  secrets: Record<string, boolean>;
+}
+
+export interface EvtxStatus { available: boolean; message: string }
+export interface EvtxIngestResult {
+  stored: number; parsed: number; skipped: number; file?: string;
+}
+
+/** Filters for the history events read (all optional). */
+export interface HistoryQuery {
+  q?: string; severity?: string; source_type?: string; host?: string;
+  limit?: number; offset?: number;
 }
 
 async function getJson<T>(url: string): Promise<T> {
@@ -713,5 +745,71 @@ export const api = {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
     return body as OemPollResult;
+  },
+
+  // --- EVTX ingest + history/retention (socf-evtx-history) ---
+  /** Whether the optional python-evtx parser is installed. When false, an .evtx
+   *  ingest returns an honest install message rather than a fake parse. */
+  evtxStatus: () => getJson<EvtxStatus>("/api/evtx/status"),
+
+  /** Ingest a Windows .evtx file into the store. A missing python-evtx library
+   *  comes back as an honest error — never a simulated parse. */
+  evtxIngest: async (file: File): Promise<{ ok: boolean; result?: EvtxIngestResult; error?: string }> => {
+    const form = new FormData();
+    form.append("file", file);
+    const res = await fetch("/api/evtx/ingest", { method: "POST", body: form });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, result: body as EvtxIngestResult }
+                  : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  },
+
+  /** Persistent history events (filter/paginate). Empty table -> honest empty. */
+  historyEvents: (query: HistoryQuery = {}) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) {
+      if (v !== undefined && v !== "" && v !== null) qs.set(k, String(v));
+    }
+    if (!qs.has("limit")) qs.set("limit", "100");
+    return getJson<StoreEventsPage>(`/api/store/events?${qs.toString()}`);
+  },
+
+  /** Command-Center KPI counts (store.metrics). */
+  storeMetrics: () => getJson<StoreMetrics>("/api/store/metrics"),
+
+  /** The store's public settings (retention_days lives here). */
+  storeSettings: () => getJson<PublicSettings>("/api/store/settings"),
+
+  setRetentionDays: async (days: number): Promise<PublicSettings> => {
+    const res = await fetch("/api/store/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: "retention_days", value: String(days) }),
+    });
+    return res.json() as Promise<PublicSettings>;
+  },
+
+  /** Retention purge of history older than N days (default: stored retention). */
+  storeCleanup: async (days?: number): Promise<{ deleted: Record<string, number>; retentionDays: number }> => {
+    const res = await fetch("/api/store/cleanup", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(days === undefined ? {} : { days }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    return body as { deleted: Record<string, number>; retentionDays: number };
+  },
+
+  /** DESTRUCTIVE full wipe of all data tables. Requires {confirm:true}; the UI
+   *  gates this behind a typed confirmation. */
+  storePurge: async (): Promise<{ purged: Record<string, number> }> => {
+    const res = await fetch("/api/store/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    return body as { purged: Record<string, number> };
   },
 };

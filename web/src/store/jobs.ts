@@ -20,6 +20,10 @@ export interface IngestJob {
   /** A finished run whose format was not parsed — a warning, not an error and
    *  not a clean "0 findings". Drives the notifier's honest tone + copy. */
   unrecognized?: boolean;
+  /** For an ingest that lands in the store (not a run) — e.g. EVTX to History:
+   *  where the completion toast's action should navigate, and its label. */
+  viewPath?: string;
+  viewLabel?: string;
   startedAt: number;      // for an honest elapsed readout
   seen?: boolean;         // dismissed / acknowledged by the user
 }
@@ -33,6 +37,9 @@ interface JobsState {
   startUpload: (files: FileList | File[], now?: number) => Promise<void>;
   /** Ingest a pasted URL — the backend fetches it and runs the same pipeline. */
   startUrl: (url: string, now?: number) => Promise<void>;
+  /** Ingest Windows .evtx files into the store (History) — a one-shot POST, not
+   *  the analyzer pipeline. Honest result/error in the same notifier. */
+  startEvtx: (files: FileList | File[], now?: number) => Promise<void>;
   dismiss: () => void;
   /** test-only reset so the module-global store doesn't leak across cases. */
   _reset: () => void;
@@ -133,6 +140,36 @@ export const useJobs = create<JobsState>((set, get) => {
           label = u.pathname.split("/").filter(Boolean).pop() || u.hostname;
         } catch { /* not a parseable URL — the backend returns an honest 400 */ }
         await runOne(label, "uploading", () => api.analyzeUrl(trimmed), now);
+      } finally {
+        set({ busy: false });
+      }
+    },
+
+    startEvtx: async (files, now = Date.now()) => {
+      const list = Array.from(files);
+      if (!list.length || get().busy) return;
+      set({ busy: true });
+      try {
+        // One file at a time; the notifier shows the outcome of each. EVTX lands
+        // in the store, so completion links to History rather than a run.
+        for (const file of list) {
+          const id = ++counter;
+          const base: IngestJob = {
+            id, file: file.name, kind: "uploading", startedAt: now,
+            viewPath: "/history", viewLabel: "View history",
+          };
+          set({ current: base });
+          const out = await api.evtxIngest(file)
+            .catch(() => ({ ok: false as const, error: "the backend is not reachable" }));
+          if (out.ok && out.result) {
+            set({ current: { ...base, kind: "done",
+              message: `${file.name} — stored ${out.result.stored} of ${out.result.parsed} EVTX record(s)`
+                + (out.result.skipped ? ` (${out.result.skipped} unreadable)` : "") + "." } });
+          } else {
+            set({ current: { ...base, kind: "error",
+              message: `Could not ingest ${file.name}: ${out.error ?? "unknown error"}` } });
+          }
+        }
       } finally {
         set({ busy: false });
       }

@@ -2992,6 +2992,178 @@ def check_ti_oem():
     return 0 if all(results) else 1
 
 
+def check_evtx():
+    """Windows EVTX ingest + history/retention (console/evtx_ingest.py +
+    /api/evtx/*, /api/store/*).
+
+    Unit: record_from_event_xml maps an EVTX record to a store event with
+    severity taken from the event's own <Level> (source-reported, NOT
+    keyword-guessed) and verbatim raw; the ingest loop stores them. Honest
+    degradation: with python-evtx unavailable, an ingest returns a clear
+    'install python-evtx' error — never a silent/fake parse. History: the store
+    read/metrics/retention/cleanup/purge(confirm) endpoints behave. Temp DB.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import store
+    import evtx_ingest as ev
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nWindows EVTX ingest + history/retention (console/evtx_ingest.py + /api/evtx, /api/store):")
+
+    SAMPLE = (
+        '<Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">'
+        '<System><Provider Name="Microsoft-Windows-Security-Auditing"/>'
+        '<EventID>4625</EventID><Level>2</Level>'
+        '<TimeCreated SystemTime="2026-08-19T10:00:00Z"/>'
+        '<Computer>WIN-DC01</Computer><Channel>Security</Channel>'
+        '<Security UserID="S-1-5-18"/></System>'
+        '<EventData><Data Name="TargetUserName">admin</Data></EventData></Event>')
+
+    real = (store.SOC_DIR, store.DB_PATH)
+    real_avail = ev.evtx_available
+    try:
+        with tempfile.TemporaryDirectory(prefix="evtx-test-") as tmp:
+            store.SOC_DIR = Path(tmp)
+            store.DB_PATH = Path(tmp) / "soc_history.db"
+            store.init_db()
+
+            # --- unit: mapping + source-reported severity -------------------
+            rec = ev.record_from_event_xml(SAMPLE)
+            check("EVTX record maps to source_type='evtx'", rec["source_type"] == "evtx")
+            check("severity is the event's own EVTX Level (2 -> ERROR), not guessed",
+                  rec["severity"] == "ERROR", rec["severity"])
+            check("EventID/Computer/Channel map through",
+                  rec["event_id"] == "4625" and rec["host"] == "WIN-DC01" and rec["category"] == "Security",
+                  str((rec["event_id"], rec["host"], rec["category"])))
+            check("raw is the verbatim record XML", rec["raw"] == SAMPLE)
+            levels = {c: ev.record_from_event_xml(
+                f'<Event><System><Level>{c}</Level></System></Event>')["severity"]
+                for c in ("0", "1", "2", "3", "4", "5", "")}
+            check("Level codes map to the reported labels (empty when absent/unknown)",
+                  levels == {"0": "INFORMATION", "1": "CRITICAL", "2": "ERROR", "3": "WARNING",
+                             "4": "INFORMATION", "5": "VERBOSE", "": ""}, str(levels))
+
+            # --- unit: ingest loop stores + dedups --------------------------
+            res = ev.ingest_event_xmls([SAMPLE, SAMPLE, "not xml <"])
+            check("ingest stores parsed records and dedups identical ones",
+                  res["stored"] == 1 and res["parsed"] == 2 and res["skipped"] == 1, str(res))
+            q = store.query("events", filters={"source_type": "evtx"})
+            check("stored EVTX event is queryable by source_type", q["total"] == 1)
+
+            # --- honest degradation: no python-evtx -------------------------
+            ev.evtx_available = lambda: False
+            raised = False
+            try:
+                ev.ingest_evtx_file("/nonexistent.evtx")
+            except ev.EvtxUnavailable as exc:
+                raised = str(exc) == ev.EVTX_MISSING_MSG
+            check("ingest_evtx_file with no python-evtx raises the honest install message", raised)
+            ev.evtx_available = real_avail
+
+            # --- HTTP: /api/evtx/* + store history endpoints ----------------
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            hport = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{hport}{path}") as r:
+                    return r.status, json.loads(r.read())
+
+            def post_json(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{hport}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            def post_evtx(filename, data):
+                boundary = "----evtxtest"
+                body = (f"--{boundary}\r\n"
+                        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+                        "Content-Type: application/octet-stream\r\n\r\n").encode() + data + \
+                    f"\r\n--{boundary}--\r\n".encode()
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{hport}/api/evtx/ingest", data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            s_st, st = get("/api/evtx/status")
+            check("GET /api/evtx/status reports parser availability honestly",
+                  s_st == 200 and "available" in st)
+
+            # A non-.evtx upload is refused.
+            s_bad, bad = post_evtx("notes.txt", b"hello")
+            check("POST /api/evtx/ingest rejects a non-.evtx upload -> 400", s_bad == 400, str(s_bad))
+
+            # nmap-style honest degradation over HTTP: force the parser absent.
+            ev.evtx_available = lambda: False
+            s_no, no = post_evtx("Security.evtx", b"\x00\x01binary")
+            check("POST /api/evtx/ingest with no python-evtx -> honest 400 install message",
+                  s_no == 400 and no.get("error") == ev.EVTX_MISSING_MSG, str(no))
+            ev.evtx_available = real_avail
+
+            # With the parser available, the HTTP handler wiring stores records.
+            # (No offline .evtx binary sample, so the container iterator is stubbed
+            # to feed a real event XML — the multipart->ingest->store path is real.)
+            real_ingest = ev.ingest_evtx_file
+            ev.ingest_evtx_file = lambda path: ev.ingest_event_xmls([SAMPLE])
+            try:
+                s_ok, ok = post_evtx("Security.evtx", b"\x00\x01binary")
+            finally:
+                ev.ingest_evtx_file = real_ingest
+            check("POST /api/evtx/ingest returns a real stored/parsed count",
+                  s_ok == 200 and ok.get("parsed") == 1, str(ok))
+
+            # History reads.
+            s_ev, evp = get("/api/store/events?source_type=evtx&limit=10")
+            check("GET /api/store/events filters history by source_type",
+                  s_ev == 200 and evp["total"] >= 1, str(evp.get("total")))
+            s_m, m = get("/api/store/metrics")
+            check("GET /api/store/metrics returns Command-Center counts",
+                  s_m == 200 and set(m) >= {"events", "critical", "high", "assets", "openVulns", "iocHits"},
+                  str(list(m)))
+
+            # Retention set + cleanup.
+            s_set, _ = post_json("/api/store/settings", {"key": "retention_days", "value": "30"})
+            check("POST /api/store/settings stores retention_days", s_set == 200)
+            s_cl, cl = post_json("/api/store/cleanup", {})
+            check("POST /api/store/cleanup reports deletions + retentionDays",
+                  s_cl == 200 and "deleted" in cl and "retentionDays" in cl, str(cl))
+
+            # Purge is destructive: refused without confirm, wipes with it.
+            s_np, np_ = post_json("/api/store/purge", {})
+            check("POST /api/store/purge WITHOUT confirm -> 400 (destructive guard)", s_np == 400, str(s_np))
+            s_p, p = post_json("/api/store/purge", {"confirm": True})
+            check("POST /api/store/purge {confirm:true} wipes the store",
+                  s_p == 200 and get("/api/store/events")[1]["total"] == 0, str(p))
+
+            srv.shutdown()
+    finally:
+        ev.evtx_available = real_avail
+        store.SOC_DIR, store.DB_PATH = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -3042,14 +3214,15 @@ def main():
     syslog_ = check_syslog()
     discovery_ = check_discovery()
     ti_oem_ = check_ti_oem()
+    evtx_ = check_evtx()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
             or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_ or discovery_ or ti_oem_):
+            or syslog_ or discovery_ or ti_oem_ or evtx_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog + discovery + ti-oem checks green")
+          "+ syslog + discovery + ti-oem + evtx checks green")
     return 0
 
 

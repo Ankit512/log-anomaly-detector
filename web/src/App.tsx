@@ -9,6 +9,7 @@ import { Discovery } from "@/pages/Discovery";
 import { Vulnerabilities } from "@/pages/Vulnerabilities";
 import { Enrichment } from "@/pages/Enrichment";
 import { OemEngine } from "@/pages/OemEngine";
+import { History } from "@/pages/History";
 import { Reports } from "@/pages/Reports";
 import { Cases } from "@/pages/Cases";
 import { Settings } from "@/pages/Settings";
@@ -29,6 +30,7 @@ export default function App() {
         <Route path="vulnerabilities" element={<Vulnerabilities />} />
         <Route path="enrichment" element={<Enrichment />} />
         <Route path="oem" element={<OemEngine />} />
+        <Route path="history" element={<History />} />
         <Route path="reports" element={<Reports />} />
         <Route path="cases" element={<Cases />} />
         <Route path="settings" element={<Settings />} />

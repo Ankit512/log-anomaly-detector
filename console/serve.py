@@ -61,6 +61,7 @@ import store  # noqa: E402  # persistent SOC Command Center store (console/store
 import syslog_collector  # noqa: E402  # live syslog listener -> store (socf-syslog)
 import discovery  # noqa: E402  # nmap discovery + vuln scan -> store (socf-discovery)
 import ti_oem  # noqa: E402  # TI enrichment (OTX/AbuseIPDB) + OEM polling (socf-ti-oem)
+import evtx_ingest  # noqa: E402  # Windows .evtx ingest -> store (socf-evtx-history)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -1036,6 +1037,11 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(ti_oem.ti_key_status())
         elif path == "/api/oem/connectors":
             self._json({"connectors": ti_oem.list_connectors()})
+        # --- Windows EVTX ingest (socf-evtx-history) ------------------------
+        elif path == "/api/evtx/status":
+            self._json({"available": evtx_ingest.evtx_available(),
+                        "message": "" if evtx_ingest.evtx_available()
+                        else evtx_ingest.EVTX_MISSING_MSG})
         elif path.startswith("/api/"):
             # An unknown /api path is a real 404 — never fall through to the SPA
             # (that would return HTML for a missing endpoint and mask the bug).
@@ -1136,6 +1142,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._oem_create_connector()
         elif path == "/api/oem/poll":
             self._oem_poll()
+        # --- Windows EVTX ingest (socf-evtx-history) -----------------------
+        elif path == "/api/evtx/ingest":
+            self._evtx_ingest()
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
 
@@ -1321,6 +1330,48 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         if ti_oem.connector_view(name) is None:
             return self._json({"error": "unknown connector"}, 404)
         return self._json(ti_oem.poll_connector(name))
+
+    # -----------------------------------------------------------------------
+    # Windows EVTX ingest (socf-evtx-history; console/evtx_ingest.py). A binary
+    # .evtx is uploaded as multipart, parsed by the OPTIONAL python-evtx library
+    # into event records, and stored (source_type="evtx"). When the library is
+    # not installed we return an honest 400 telling the user to install it —
+    # never a silent or simulated parse. severity is the event's own EVTX Level
+    # (source-reported); raw is the verbatim record XML. Read the results back
+    # via /api/store/events?source_type=evtx.
+    # -----------------------------------------------------------------------
+    def _evtx_ingest(self):
+        ctype = self.headers.get("Content-Type", "")
+        if not ctype.startswith("multipart/form-data"):
+            return self._json({"error": "upload the .evtx as multipart/form-data"}, 400)
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length)
+        fields = parse_multipart(body, ctype)
+        item = fields.get("file")
+        if not item or item[1] is None:
+            return self._json({"error": "no file uploaded (expected a 'file' part)"}, 400)
+        filename, data = item
+        if not (filename or "").lower().endswith(".evtx"):
+            return self._json({"error": "this endpoint ingests Windows .evtx files"}, 400)
+
+        # Honest degradation: no optional parser -> a clear install message.
+        if not evtx_ingest.evtx_available():
+            return self._json({"error": evtx_ingest.EVTX_MISSING_MSG}, 400)
+
+        store.init_db()
+        with tempfile.NamedTemporaryFile(suffix=".evtx", delete=True) as tmp:
+            tmp.write(data)
+            tmp.flush()
+            try:
+                result = evtx_ingest.ingest_evtx_file(tmp.name)
+            except evtx_ingest.EvtxUnavailable as exc:
+                return self._json({"error": str(exc)}, 400)
+            except Exception as exc:
+                return self._json(
+                    {"error": f"could not parse {Path(filename).name}: {exc}"}, 400)
+        result["file"] = Path(filename).name
+        print(f"  evtx ingest {result['file']}: {result}", flush=True)
+        return self._json(result)
 
     do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
 
