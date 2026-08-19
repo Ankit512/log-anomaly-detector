@@ -192,6 +192,47 @@ export interface Report { name: string; bytes: number; createdAt: string }
  *  is idle — an empty inventory is indistinguishable from "nothing at risk". */
 type OrError<T> = T | { error: string };
 
+// --- Cases (Phase C) ---
+export type CaseStatus = "open" | "investigating" | "closed";
+export const CASE_STATUSES: CaseStatus[] = ["open", "investigating", "closed"];
+
+export interface Case {
+  id: string;
+  title: string;
+  notes: string;
+  assignee: string;
+  status: CaseStatus;
+  links: { findings: string[]; incidents: string[] };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CaseCreate {
+  title: string;
+  notes?: string;
+  assignee?: string;
+  links?: { findings?: string[]; incidents?: string[] };
+}
+
+export type CasePatch = Partial<Pick<Case, "title" | "notes" | "assignee" | "status">>;
+
+// --- Settings (Phase C) ---
+/** Masked compute config from /api/compute — the key is never exposed, only
+ *  whether one is set (`hasKey`). Remote fields are absent when mode is local. */
+export interface ComputeConfig {
+  mode: "local" | "remote";
+  baseUrl?: string;
+  model?: string;
+  hasKey?: boolean;
+}
+
+export interface ComputeInput {
+  mode: "local" | "remote";
+  baseUrl?: string;
+  model?: string;
+  apiKey?: string;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -312,5 +353,49 @@ export const api = {
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
     return body as Report;
+  },
+
+  // --- Cases (Phase C) ---
+  // Analyst-entered records in cases.json: GET list, POST create (title
+  // required), PATCH one by id. The store is the only writer; nothing is
+  // derived — an empty store honestly means no cases.
+  listCases: () => getJson<{ cases: Case[] }>("/api/cases"),
+
+  createCase: async (input: CaseCreate): Promise<{ ok: boolean; case?: Case; error?: string }> => {
+    const res = await fetch("/api/cases", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, case: body as Case }
+                  : { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
+
+  patchCase: async (id: string, patch: CasePatch): Promise<{ ok: boolean; case?: Case; error?: string }> => {
+    const res = await fetch(`/api/cases/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, case: body as Case }
+                  : { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
+
+  // --- Settings (Phase C) ---
+  // The masked compute config (never the API key itself). Only real,
+  // effective knobs — mode local/remote, and for remote the base URL/model.
+  getCompute: () => getJson<ComputeConfig>("/api/compute"),
+
+  setCompute: async (input: ComputeInput): Promise<{ ok: boolean; config?: ComputeConfig; error?: string }> => {
+    const res = await fetch("/api/compute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, config: body as ComputeConfig }
+                  : { ok: false, error: body.error ?? `HTTP ${res.status}` };
   },
 };

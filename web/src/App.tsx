@@ -6,6 +6,9 @@ import { Incidents } from "@/pages/Incidents";
 import { ThreatIntel } from "@/pages/ThreatIntel";
 import { Assets } from "@/pages/Assets";
 import { Reports } from "@/pages/Reports";
+import { Cases } from "@/pages/Cases";
+import { Settings } from "@/pages/Settings";
+import { Logout } from "@/pages/Logout";
 import { Placeholder } from "@/pages/Placeholder";
 
 export default function App() {
@@ -18,8 +21,9 @@ export default function App() {
         <Route path="threat-intel" element={<ThreatIntel />} />
         <Route path="assets" element={<Assets />} />
         <Route path="reports" element={<Reports />} />
-        <Route path="cases" element={<Placeholder title="Cases" />} />
-        <Route path="settings" element={<Placeholder title="Settings" />} />
+        <Route path="cases" element={<Cases />} />
+        <Route path="settings" element={<Settings />} />
+        <Route path="logout" element={<Logout />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
       </Route>
     </Routes>

@@ -29,6 +29,9 @@ interface UiState {
   setSidebarOpen: (open: boolean) => void;
   setTimeWindow: (w: string) => void;
   setSearch: (s: string) => void;
+  /** Clear local UI state to a neutral default — used by the honest Logout,
+   *  which has no server session to end. Forgets the saved theme too. */
+  resetUi: () => void;
 }
 
 export const useUi = create<UiState>((set, get) => ({
@@ -45,4 +48,9 @@ export const useUi = create<UiState>((set, get) => ({
   setSidebarOpen: (sidebarOpen) => set({ sidebarOpen }),
   setTimeWindow: (timeWindow) => set({ timeWindow }),
   setSearch: (search) => set({ search }),
+  resetUi: () => {
+    try { localStorage.removeItem(THEME_KEY); } catch { /* storage unavailable */ }
+    applyThemeClass("light");
+    set({ theme: "light", search: "", timeWindow: "Current run" });
+  },
 }));
