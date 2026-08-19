@@ -1880,15 +1880,23 @@ def check_soc_overview():
                 check("unreachable model -> honest error, never a fabricated answer",
                       status == 502 and "not reachable" in out.get("error", ""), str(out))
 
-                # --- routing: Overview lands at /, console at /alerts -------
-                check("/ serves the SOC Overview",
-                      "security operations" in get("/", raw=True))
-                check("/alerts and /console serve the review console",
-                      "local log anomaly review" in get("/alerts", raw=True)
-                      and "local log anomaly review" in get("/console", raw=True))
-                check("Overview links point at /alerts with ?sel deep-link",
-                      'href="/alerts"' in get("/", raw=True)
-                      and "/alerts?sel=" in get("/", raw=True))
+                # --- routing (Phase E): the React SOC app owns / and /alerts;
+                #     the old vanilla pages moved to /legacy/*. (Full serve.py ->
+                #     web/dist coverage is in check_serve_react.) --------------
+                check("/ serves the React SOC app, not the old vanilla overview",
+                      'id="root"' in get("/", raw=True)
+                      and "security operations" not in get("/", raw=True))
+                check("/alerts serves the React app (SPA route), not the vanilla console",
+                      'id="root"' in get("/alerts", raw=True))
+                check("/legacy/overview.html still serves the old SOC Overview",
+                      "security operations" in get("/legacy/overview.html", raw=True))
+                check("/legacy/alerts + /legacy/anomaly_console.html serve the review console",
+                      "local log anomaly review" in get("/legacy/alerts", raw=True)
+                      and "local log anomaly review"
+                          in get("/legacy/anomaly_console.html", raw=True))
+                check("the legacy Overview still deep-links into the review console",
+                      'href="/alerts"' in get("/legacy/overview.html", raw=True)
+                      and "/alerts?sel=" in get("/legacy/overview.html", raw=True))
 
                 # --- ask/overview honest when no run yet --------------------
                 serve.STATE = {"idle": True}
@@ -2281,6 +2289,100 @@ def check_export():
     return 0 if all(results) else 1
 
 
+def check_serve_react():
+    """serve.py serves the BUILT React SOC app at '/', with SPA fallback.
+
+    The fix for the recurring ':8765 shows the old vanilla page' confusion:
+    '/' and every client route now return web/dist/index.html; dist assets serve
+    with the right Content-Type; and every /api route + /console_state.json still
+    respond. Old vanilla pages live on at /legacy/*. Runs over a live socket.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nserve.py serves the built React app (web/dist) at ':8765':")
+
+    if not (serve.WEB_DIST / "index.html").exists():
+        print("  [SKIP] web/dist not built — run `cd web && npm run build` "
+              "(the committed build should make this present in CI).")
+        return 0
+
+    real_state = serve.STATE
+    try:
+        serve.STATE = {"idle": True}
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+        port = srv.server_address[1]
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+        def get(path):
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
+                return r.status, dict(r.headers), r.read().decode(errors="replace")
+
+        # '/' is the React app: the SPA root div + hashed asset refs, and NONE of
+        # the old vanilla-page markers.
+        status, _, home = get("/")
+        check("GET / returns 200", status == 200, str(status))
+        check("GET / is the React app shell (has #root div)", 'id="root"' in home)
+        check("GET / references a built /assets/ bundle",
+              "/assets/index-" in home)
+        check("GET / is NOT the old vanilla overview/console page",
+              "console_state.json" not in home and "anomaly_console" not in home)
+
+        # SPA fallback: a client route returns the same shell so refresh works.
+        _, _, incidents = get("/incidents")
+        check("GET /incidents (client route) falls back to the app shell",
+              'id="root"' in incidents)
+
+        # A hashed asset serves with the right Content-Type.
+        import re as _re
+        m = _re.search(r"/assets/(index-[\w-]+\.js)", home)
+        check("index.html links a JS asset", bool(m))
+        if m:
+            status, headers, _ = get(f"/assets/{m.group(1)}")
+            check("dist JS asset serves 200 with a JS Content-Type",
+                  status == 200 and "javascript" in headers.get("Content-Type", ""),
+                  f"{status} {headers.get('Content-Type')}")
+
+        # Every API surface still works, unchanged.
+        status, headers, body = get("/api/metrics")
+        check("/api/metrics still returns JSON",
+              status == 200 and "application/json" in headers.get("Content-Type", "")
+              and '"openIncidents"' in body)
+        status, headers, _ = get("/console_state.json")
+        check("/console_state.json still returns JSON",
+              status == 200 and "application/json" in headers.get("Content-Type", ""))
+
+        # An unknown /api path is a real 404, never the SPA shell.
+        try:
+            get("/api/does-not-exist")
+            check("unknown /api path -> 404 (not the SPA)", False, "no error")
+        except urllib.error.HTTPError as e:
+            check("unknown /api path -> 404 (not the SPA)", e.code == 404, str(e.code))
+
+        # The old vanilla pages remain reachable under /legacy/*.
+        status, _, legacy = get("/legacy/overview.html")
+        check("/legacy/overview.html still serves the old page",
+              status == 200 and "<html" in legacy.lower())
+
+        srv.shutdown()
+    finally:
+        serve.STATE = real_state
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2326,12 +2428,13 @@ def main():
     soc = check_soc_overview()
     subsystems = check_soc_subsystems()
     export_ = check_export()
+    react = check_serve_react()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
-            or layout or allruns or soc or subsystems or export_):
+            or layout or allruns or soc or subsystems or export_ or react):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview + soc-subsystems + export checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react checks green")
     return 0
 
 

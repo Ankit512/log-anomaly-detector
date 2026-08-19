@@ -1,5 +1,7 @@
 node_modules/
-dist/
+# dist/ is intentionally COMMITTED: console/serve.py serves web/dist at :8765 so
+# a fresh `git pull && python3 console/serve.py` runs the app with no Node. Rebuild
+# with `npm run build` and commit the result when the frontend changes.
 *.local
 .vite/
 coverage/

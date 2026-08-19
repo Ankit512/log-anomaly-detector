@@ -31,6 +31,7 @@ import argparse
 import http.server
 import ipaddress
 import json
+import mimetypes
 import os
 import shutil
 import signal
@@ -63,6 +64,11 @@ from tactic_phase_map import phase_for_tactics  # noqa: E402
 
 CONSOLE_HTML = HERE / "anomaly_console.html"
 OVERVIEW_HTML = HERE / "overview.html"
+
+# The built React SOC app (web/dist). Committed to the repo so a fresh
+# `git pull && python3 console/serve.py` serves the app with NO Node required.
+# Missing dist is handled honestly (a build hint), never a crash — see _serve_web.
+WEB_DIST = HERE.parent / "web" / "dist"
 STATE_FILE = HERE / "console_state.json"        # gitignored; handy for debugging
 
 # Completed runs are written here so the dashboard survives a refresh, a restart, or
@@ -943,11 +949,12 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlparse(self.path).path
-        # The SOC Overview is the landing page; the dark review console is the
-        # "Alerts" drill-down. /anomaly_console.html keeps old bookmarks alive.
-        if path in ("/", "/index.html", "/overview.html"):
+        # The React SOC app now owns '/', '/alerts', and every client route
+        # (served from web/dist by the SPA-fallback in _serve_web). The old
+        # vanilla pages stay reachable under /legacy/* for existing bookmarks.
+        if path in ("/legacy", "/legacy/", "/legacy/overview.html"):
             self._send(OVERVIEW_HTML.read_bytes(), "text/html; charset=utf-8")
-        elif path in ("/alerts", "/console", "/anomaly_console.html"):
+        elif path in ("/legacy/alerts", "/legacy/anomaly_console.html"):
             self._send(CONSOLE_HTML.read_bytes(), "text/html; charset=utf-8")
         elif path == "/api/overview":
             self._json(overview_state())
@@ -1011,8 +1018,56 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(soc.threat_intel_summary())
         elif path == "/api/metrics":
             self._json(soc.metrics(STATE, [r.get("label") for r in list_runs()]))
-        else:
+        elif path.startswith("/api/"):
+            # An unknown /api path is a real 404 — never fall through to the SPA
+            # (that would return HTML for a missing endpoint and mask the bug).
             self.send_error(404, "This server only serves the console, its state, and /api")
+        else:
+            # Everything else is the React SOC app: a built asset, or the SPA
+            # fallback so client routes (/incidents, /alerts, …) work on refresh.
+            self._serve_web(path)
+
+    def _serve_web(self, path):
+        """Serve the built React SOC app from web/dist.
+
+        A GET path that maps to an existing dist file is served with the right
+        Content-Type; anything else returns dist/index.html (SPA fallback), so a
+        deep-link or refresh on a client route still loads the app. When the
+        build is absent the API keeps working and this returns an honest build
+        hint rather than crashing or faking a page.
+        """
+        index = WEB_DIST / "index.html"
+        if not index.exists():
+            hint = (
+                "<!doctype html><meta charset=utf-8>"
+                "<title>itsoc — web build missing</title>"
+                "<body style=\"font:15px/1.5 system-ui,sans-serif;max-width:40rem;"
+                "margin:3rem auto;padding:0 1rem\">"
+                "<h1>The web app isn't built yet</h1>"
+                "<p>The API is running, but <code>web/dist</code> was not found. "
+                "Build it once:</p>"
+                "<pre>cd web &amp;&amp; npm install &amp;&amp; npm run build</pre>"
+                "<p>then reload. (For frontend work you can also run "
+                "<code>npm run dev</code> and use "
+                "<a href=\"http://localhost:5173\">http://localhost:5173</a>.)</p>"
+                "</body>"
+            ).encode()
+            return self._send(hint, "text/html; charset=utf-8", 503)
+
+        # Resolve a candidate asset strictly inside dist (no path traversal).
+        rel = path.lstrip("/")
+        if rel:
+            try:
+                candidate = (WEB_DIST / rel).resolve()
+                candidate.relative_to(WEB_DIST.resolve())
+            except (ValueError, OSError):
+                candidate = None
+            if candidate and candidate.is_file():
+                ctype = mimetypes.guess_type(str(candidate))[0] or "application/octet-stream"
+                return self._send(candidate.read_bytes(), ctype)
+
+        # SPA fallback: hand the app shell to the client router.
+        self._send(index.read_bytes(), "text/html; charset=utf-8")
 
     def do_HEAD(self):
         self.do_GET()
