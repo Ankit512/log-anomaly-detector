@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Bell, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
+  Antenna, Bell, FileText, Filter, Folder, House, Link as LinkIcon, LogOut, Monitor,
   RefreshCw, Settings, Shield, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,13 +26,15 @@ export const NAV = [
   { to: "/assets", label: "Assets", icon: Monitor, ready: true },
   { to: "/reports", label: "Reports", icon: FileText, ready: true },
   { to: "/cases", label: "Cases", icon: Folder, ready: true },
+  // socf-syslog: live syslog collector control panel.
+  { to: "/collectors", label: "Collectors", icon: Antenna, ready: true },
   { to: "/settings", label: "Settings", icon: Settings, ready: true },
 ] as const;
 
 const TITLES: Record<string, string> = {
   "/": "SOC Dashboard", "/alerts": "Alerts", "/incidents": "Incidents",
   "/threat-intel": "Threat Intel", "/assets": "Assets", "/reports": "Reports",
-  "/cases": "Cases", "/settings": "Settings",
+  "/cases": "Cases", "/collectors": "Collectors", "/settings": "Settings",
 };
 
 function Sidebar() {

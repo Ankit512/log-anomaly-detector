@@ -8,6 +8,7 @@ import { Assets } from "@/pages/Assets";
 import { Reports } from "@/pages/Reports";
 import { Cases } from "@/pages/Cases";
 import { Settings } from "@/pages/Settings";
+import { Collectors } from "@/pages/Collectors";
 import { Logout } from "@/pages/Logout";
 import { Placeholder } from "@/pages/Placeholder";
 
@@ -23,6 +24,7 @@ export default function App() {
         <Route path="reports" element={<Reports />} />
         <Route path="cases" element={<Cases />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="collectors" element={<Collectors />} />
         <Route path="logout" element={<Logout />} />
         <Route path="*" element={<Placeholder title="Not found" />} />
       </Route>

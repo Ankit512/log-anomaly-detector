@@ -2527,6 +2527,149 @@ def check_store():
     return 0 if all(results) else 1
 
 
+def check_syslog():
+    """The live syslog collector (console/syslog_collector.py + /api/syslog/*).
+
+    Unit level: PRI severity is SOURCE-REPORTED (decoded from the PRI, never
+    guessed), raw is verbatim, no-PRI => empty severity. Live level: a real UDP
+    packet to a loopback listener lands in the store as a syslog event, status
+    reflects the true running/stopped/received state, and a bad bind/port is an
+    honest error, not a fake 'running'. Runs against a temp store DB.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import socket
+    import time
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import store
+    import syslog_collector as sc
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nLive syslog collector (console/syslog_collector.py + /api/syslog/*):")
+
+    real = (store.SOC_DIR, store.DB_PATH)
+    collector = sc.COLLECTOR
+    try:
+        with tempfile.TemporaryDirectory(prefix="syslog-test-") as tmp:
+            store.SOC_DIR = Path(tmp)
+            store.DB_PATH = Path(tmp) / "soc_history.db"
+            store.init_db()
+
+            # --- unit: severity is the source's PRI level, never guessed -----
+            e = sc.parse_syslog("<34>Oct 11 22:14:15 mymachine su: failed for lonvick",
+                                "203.0.113.9")
+            check("PRI severity is source-reported (34 & 7 == 2 -> CRITICAL)",
+                  e["severity"] == "CRITICAL", e["severity"])
+            check("RFC3164 host is parsed from the envelope", e["host"] == "mymachine", e["host"])
+            check("raw is the verbatim received line",
+                  e["raw"] == "<34>Oct 11 22:14:15 mymachine su: failed for lonvick")
+            check("sender IP is recorded as src_ip", e["src_ip"] == "203.0.113.9")
+            # A message with alarming words but NO PRI must NOT be assigned a
+            # severity — the collector never keyword-guesses a verdict.
+            e2 = sc.parse_syslog("kernel panic ransomware detected", "")
+            check("no PRI => empty severity (never keyword-guessed)", e2["severity"] == "", e2["severity"])
+
+            # --- live: UDP packet -> loopback listener -> store --------------
+            port = 0
+            for cand in range(21000, 21050):
+                st = collector.start(port=cand, bind="127.0.0.1")
+                if st["running"]:
+                    port = cand
+                    break
+                collector.stop()
+            check("collector binds a loopback UDP/TCP port and reports running",
+                  port and collector.status()["running"], collector.status().get("error"))
+            check("a freshly started loopback listener is not network-exposed",
+                  collector.status()["exposed"] is False)
+
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.sendto(b"<13>Aug 19 10:00:00 host1 app: hello over udp", ("127.0.0.1", port))
+            s.sendto(b"<11>Aug 19 10:00:01 host2 svc: disk error", ("127.0.0.1", port))
+            s.close()
+            deadline = time.time() + 3
+            while collector.status()["receivedCount"] < 2 and time.time() < deadline:
+                time.sleep(0.05)
+            status = collector.status()
+            check("status.receivedCount reflects the real messages received",
+                  status["receivedCount"] == 2, str(status["receivedCount"]))
+            q = store.query("events", filters={"source_type": "syslog"})
+            check("received syslog messages land in the store as events", q["total"] == 2, str(q["total"]))
+            raws = {i["raw"] for i in q["items"]}
+            check("stored raw is verbatim, PRI envelope included",
+                  "<11>Aug 19 10:00:01 host2 svc: disk error" in raws)
+            sevs = {i["raw"]: i["severity"] for i in q["items"]}
+            check("stored severity is the source PRI level (13->NOTICE, 11->ERROR)",
+                  sevs.get("<13>Aug 19 10:00:00 host1 app: hello over udp") == "NOTICE"
+                  and sevs.get("<11>Aug 19 10:00:01 host2 svc: disk error") == "ERROR", str(sevs))
+
+            stopped = collector.stop()
+            check("stop() leaves the listener honestly not-running", stopped["running"] is False)
+
+            # --- live HTTP: /api/syslog/* routes -----------------------------
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            hport = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{hport}{path}") as r:
+                    return r.status, json.loads(r.read())
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{hport}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            s_status, body = get("/api/syslog/status")
+            check("GET /api/syslog/status returns the real listener shape",
+                  s_status == 200 and set(body) >= {"running", "bind", "port", "receivedCount", "exposed"})
+
+            # An arbitrary bind address is refused (only loopback / explicit 0.0.0.0).
+            s_bad, bad = post("/api/syslog/start", {"port": 21099, "bind": "8.8.8.8"})
+            check("POST /api/syslog/start rejects a non-loopback/non-0.0.0.0 bind -> 400",
+                  s_bad == 400, str(s_bad))
+
+            # A privileged port fails to bind and is an honest 400 error, not a fake OK.
+            s_priv, priv = post("/api/syslog/start", {"port": 80, "bind": "127.0.0.1"})
+            check("POST /api/syslog/start on a privileged port -> 400 with an honest error",
+                  s_priv == 400 and priv.get("running") is False and priv.get("error"),
+                  str(s_priv))
+
+            # A good start over HTTP actually runs; stop over HTTP stops it.
+            hbind = None
+            for cand in range(21100, 21150):
+                s_ok, ok = post("/api/syslog/start", {"port": cand, "bind": "127.0.0.1"})
+                if s_ok == 200 and ok.get("running"):
+                    hbind = cand
+                    break
+                post("/api/syslog/stop", {})
+            check("POST /api/syslog/start binds and reports running over HTTP", hbind is not None)
+            s_stop, stopped2 = post("/api/syslog/stop", {})
+            check("POST /api/syslog/stop stops the listener honestly",
+                  s_stop == 200 and stopped2.get("running") is False)
+
+            srv.shutdown()
+    finally:
+        collector.stop()
+        store.SOC_DIR, store.DB_PATH = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2574,12 +2717,15 @@ def main():
     export_ = check_export()
     react = check_serve_react()
     store_ = check_store()
+    syslog_ = check_syslog()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
-            or layout or allruns or soc or subsystems or export_ or react or store_):
+            or layout or allruns or soc or subsystems or export_ or react or store_
+            or syslog_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
+          "+ syslog checks green")
     return 0
 
 
