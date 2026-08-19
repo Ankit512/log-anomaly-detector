@@ -2170,6 +2170,117 @@ def check_soc_subsystems():
     return 0 if all(results) else 1
 
 
+def check_export():
+    """Downloadable run exports — GET /api/export?format=csv|xml|json|html|md.
+
+    Asserts, against a REAL loaded run served over a live socket: the right
+    Content-Type and a Content-Disposition attachment named <runId>.<ext>; that
+    the body carries the run's actual findings (never fabricated); that an
+    unknown format is a 400; and that an idle server is an honest 409, never an
+    empty-but-official file.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import adapter
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\ndownloadable exports — /api/export (csv/xml/json/html/md):")
+
+    real = (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE, serve.CURRENT_RUN_FILE)
+    try:
+        with tempfile.TemporaryDirectory(prefix="export-test-") as tmp:
+            tmp = Path(tmp)
+            serve.RUNS_DIR = tmp / ".runs"
+            serve.STATE_FILE = tmp / "console_state.json"
+
+            log = tmp / "attack.log"
+            log.write_text("\n".join(
+                f"2026-08-13T02:16:{44 + i:02d}Z ERROR host-1 "
+                f"auth failed for user 'admin' from 203.0.113.44" for i in range(6)) + "\n")
+            state = adapter.adapt({
+                "source_file": str(log),
+                "generated_at": "2026-08-18T12:00:00+00:00",
+                "lines_parsed": 6, "lines_unparsed": 0,
+                "findings": [{
+                    "source": "detector", "severity": "high", "rule_id": "auth_bruteforce",
+                    "summary": "auth_bruteforce for 'admin' from 203.0.113.44",
+                    "evidence": "", "entities": {"ip": "203.0.113.44"},
+                    "timeline": [{"t": "02:16:44", "label": "x", "line": 1,
+                                  "ts": "2026-08-13T02:16:44+00:00"}]}]})
+            state["idle"] = False
+            state["sourceLabel"] = "attack.log"
+            serve.STATE = state
+            run_id = state["runId"]
+
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
+                    return r.status, dict(r.headers), r.read()
+
+            expected = {
+                "csv": ("text/csv", "csv"),
+                "xml": ("application/xml", "xml"),
+                "json": ("application/json", "json"),
+                "html": ("text/html", "html"),
+                "md": ("text/markdown", "md"),
+            }
+            for fmt, (ctype, ext) in expected.items():
+                status, headers, body = get(f"/api/export?format={fmt}")
+                text = body.decode(errors="replace")
+                check(f"{fmt}: 200 OK", status == 200, str(status))
+                check(f"{fmt}: Content-Type is {ctype}",
+                      headers.get("Content-Type", "").startswith(ctype),
+                      headers.get("Content-Type"))
+                check(f"{fmt}: Content-Disposition attachment named {run_id}.{ext}",
+                      headers.get("Content-Disposition", "")
+                      == f'attachment; filename="{run_id}.{ext}"',
+                      headers.get("Content-Disposition"))
+                check(f"{fmt}: body carries the REAL finding (rule + entity), not a fabrication",
+                      "auth_bruteforce" in text and "203.0.113.44" in text)
+
+            # CSV is one header row + one row per finding — a real tabular export.
+            _, _, csv_body = get("/api/export?format=csv")
+            rows = [r for r in csv_body.decode().splitlines() if r.strip()]
+            check("csv: header + one data row for the single finding", len(rows) == 2,
+                  f"{len(rows)} rows")
+
+            # Unknown format is a 400, not a silent default.
+            try:
+                get("/api/export?format=bogus")
+                check("unknown format -> 400", False, "no error raised")
+            except urllib.error.HTTPError as e:
+                check("unknown format -> 400", e.code == 400, str(e.code))
+
+            # Idle server: an honest 409, never an empty file.
+            serve.STATE = {"idle": True}
+            for fmt in ("csv", "xml", "json", "html", "md"):
+                try:
+                    get(f"/api/export?format={fmt}")
+                    check(f"idle -> 409 for {fmt} (no empty file)", False, "got a file")
+                except urllib.error.HTTPError as e:
+                    check(f"idle -> 409 for {fmt} (no empty file)", e.code == 409, str(e.code))
+
+            srv.shutdown()
+    finally:
+        (serve.RUNS_DIR, serve.STATE_FILE, serve.STATE, serve.CURRENT_RUN_FILE) = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2214,12 +2325,13 @@ def main():
     allruns = check_allruns()
     soc = check_soc_overview()
     subsystems = check_soc_subsystems()
+    export_ = check_export()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
-            or layout or allruns or soc or subsystems):
+            or layout or allruns or soc or subsystems or export_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview + soc-subsystems checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems + export checks green")
     return 0
 
 

@@ -188,6 +188,18 @@ export interface ThreatIntel {
 
 export interface Report { name: string; bytes: number; createdAt: string }
 
+/** Downloadable export formats served by GET /api/export. Each is a real
+ *  serialization of the CURRENT run's findings (console/export.py) — no
+ *  fabricated rows. `label`/`ext` drive the Download panel controls. */
+export type ExportFormat = "csv" | "html" | "xml" | "json" | "md";
+export const EXPORT_FORMATS: { format: ExportFormat; label: string; ext: string }[] = [
+  { format: "csv", label: "CSV", ext: "csv" },
+  { format: "json", label: "JSON", ext: "json" },
+  { format: "xml", label: "XML", ext: "xml" },
+  { format: "html", label: "HTML", ext: "html" },
+  { format: "md", label: "Markdown", ext: "md" },
+];
+
 /** Both /api/assets and /api/users return {error} (HTTP 200) when the server
  *  is idle — an empty inventory is indistinguishable from "nothing at risk". */
 type OrError<T> = T | { error: string };
@@ -368,6 +380,11 @@ export const api = {
     if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`);
     return body as Report;
   },
+
+  /** URL of a downloadable export of the CURRENT run in `format` (GET
+   *  /api/export). The backend sets Content-Disposition: attachment and a
+   *  <runId>.<ext> filename; used as an <a href download>. 409 when idle. */
+  exportUrl: (format: ExportFormat) => `/api/export?format=${format}`,
 
   // --- Cases (Phase C) ---
   // Analyst-entered records in cases.json: GET list, POST create (title

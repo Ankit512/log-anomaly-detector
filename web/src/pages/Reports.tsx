@@ -1,13 +1,73 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/lib/api";
+import { api, EXPORT_FORMATS } from "@/lib/api";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { FileText } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Download, FileText } from "lucide-react";
 
 const th = "px-2 py-2 text-left text-[10.5px] uppercase tracking-wide text-muted-foreground";
 
 function kb(bytes: number) {
   return bytes >= 1024 ? `${(bytes / 1024).toFixed(1)} KB` : `${bytes} B`;
+}
+
+/** One control per export format. When a run is loaded each is a real
+ *  <a href download> that hits GET /api/export?format=X — the backend answers
+ *  with Content-Disposition: attachment, so the browser saves <runId>.<ext>.
+ *  With no run loaded the controls are honestly disabled (the endpoint would
+ *  409); we never offer a download that would produce an empty file. */
+function DownloadPanel({ hasRun }: { hasRun: boolean }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-[15px]">Download the current run</CardTitle>
+        <p className="text-[11.5px] text-muted-foreground">
+          The real findings, severities and MITRE tags this run produced — no fabricated rows.
+        </p>
+      </CardHeader>
+      <CardContent className="pt-0">
+        <div className="flex flex-wrap items-center gap-2" data-testid="download-panel">
+          {EXPORT_FORMATS.map(({ format, label }) =>
+            hasRun ? (
+              <a
+                key={format}
+                href={api.exportUrl(format)}
+                download
+                data-testid={`download-${format}`}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md border bg-card px-3 py-2",
+                  "text-[12.5px] font-medium hover:bg-muted",
+                )}
+                title={`Download this run as ${label} (${format})`}
+              >
+                <Download className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+                {label}
+              </a>
+            ) : (
+              <span
+                key={format}
+                data-testid={`download-${format}`}
+                aria-disabled="true"
+                className={cn(
+                  "inline-flex cursor-not-allowed items-center gap-1.5 rounded-md border bg-card px-3 py-2",
+                  "text-[12.5px] font-medium opacity-50",
+                )}
+                title="No run loaded — analyze a log first, then export"
+              >
+                <Download className="h-4 w-4" strokeWidth={1.8} aria-hidden />
+                {label}
+              </span>
+            ),
+          )}
+        </div>
+        {!hasRun && (
+          <p className="mt-2 text-[11.5px] text-muted-foreground">
+            No run loaded — analyze a log from the Overview, then download it here.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function Reports() {
@@ -16,6 +76,8 @@ export function Reports() {
     queryKey: ["reports"],
     queryFn: api.reports,
   });
+  const { data: state } = useQuery({ queryKey: ["console-state"], queryFn: api.consoleState });
+  const hasRun = !!state && !state.idle;
 
   const generate = useMutation({
     mutationFn: api.generateReport,
@@ -57,6 +119,8 @@ export function Reports() {
           </div>
         </CardContent>
       </Card>
+
+      <DownloadPanel hasRun={hasRun} />
 
       <Card>
         <CardHeader>
