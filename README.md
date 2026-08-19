@@ -24,8 +24,9 @@ false all-clear.
 > [`CLAUDE.md`](CLAUDE.md) holds the repo's non-negotiable guardrails (detector frozen, rules
 > own severity, honest surfaces) for anyone — human or agent — working in the code.
 
-Runs on **macOS, Linux and Windows**. The analysis engine is Python standard library only —
-no `pip install`. The optional React dashboard needs Node (`npm install`) once.
+Runs on **macOS, Linux and Windows**. Python standard library only — no `pip install`, and
+**no Node needed to run**: the React dashboard ships as a pre-built bundle that `serve.py`
+serves at `:8765`. (Node is only needed if you want to *modify* the frontend.)
 
 ---
 
@@ -83,34 +84,39 @@ large apps — swapping is the single biggest cause of slow runs.
 python3 console/serve.py
 ```
 
-A browser opens at **http://127.0.0.1:8765/**. Choose a bundled sample and you are running.
-This is the built-in, zero-dependency **review console** (vanilla JS, no build step).
+A browser opens at **http://127.0.0.1:8765/** showing the **React SOC dashboard** — one
+command, one URL, **no Node required**: the app is served from a production build committed to
+the repo (`web/dist`). Upload a log (or pick a bundled sample) and you are running.
 
 To stop it: `Ctrl-C` in the terminal.
 
 ---
 
-## 3. Two front-ends, one backend
+## 3. The SOC dashboard, and how it's served
 
-`console/serve.py` is the single local backend (stdlib HTTP, `127.0.0.1:8765`). It owns
-analysis, saved runs, and a JSON API. Two UIs read from it:
+`console/serve.py` is the single local backend (stdlib HTTP, `127.0.0.1:8765`) — it owns
+analysis, saved runs, and a JSON API. It **also serves the built React SOC platform**
+(`web/`, "itsoc-web") at `/`, so `python3 console/serve.py` alone shows the dashboard with no
+Node install. The React app is a *pure consumer* of the API; it never computes a verdict
+itself. The older vanilla review console stays reachable at
+[`/legacy/overview.html`](http://127.0.0.1:8765/legacy/overview.html) and
+[`/legacy/alerts`](http://127.0.0.1:8765/legacy/alerts).
 
-- **The review console** (`console/anomaly_console.html`) — self-contained vanilla JS served
-  at `/`. Findings ranked by severity, per-finding evidence, the rule predicate that fired, an
-  event timeline, and an integrity manifest. No build step, no framework, no network.
-- **The React SOC platform** (`web/`, "itsoc-web") — a Vite + React + TypeScript dashboard
-  that is a *pure consumer* of the same API; it never computes a severity or verdict itself.
+### Developing the frontend (optional)
 
-### Run the SOC dashboard (optional)
+Only needed if you're changing the React code. The Vite dev server gives hot-reload; the
+backend still serves the API on `:8765`:
 
 ```bash
-# 1. backend — the API (and the legacy console) on 127.0.0.1:8765
-python3 console/serve.py --no-open
+python3 console/serve.py --no-open      # API on :8765
+cd web && npm install && npm run dev    # http://localhost:5173 — /api/* proxies to :8765
+```
 
-# 2. frontend — needs network once for npm install, offline after
-cd web
-npm install
-npm run dev         # http://localhost:5173  — /api/* proxies to :8765
+After changing the frontend, rebuild and commit the bundle so the one-command flow stays
+current:
+
+```bash
+cd web && npm run build                 # regenerates web/dist (committed to the repo)
 ```
 
 The dashboard's sections, each backed by a real endpoint (contract in
