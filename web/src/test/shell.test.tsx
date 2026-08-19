@@ -14,7 +14,9 @@ describe("uniform v6 app shell", () => {
     // v6 drops the "soon" pills: unbuilt nav items carry a title instead, and
     // Logout is a disabled button with its own honest title.
     const nav = screen.getByRole("navigation", { name: "Main" });
-    expect(within(nav).getAllByTitle(/not built yet/i).length).toBe(6);
+    // Cases + Settings remain unbuilt (Incidents/Threat Intel/Assets/Reports
+    // are now real pages); those two still carry the honest "not built yet" title.
+    expect(within(nav).getAllByTitle(/not built yet/i).length).toBe(2);
     expect(screen.getByText("Logout").closest("button")).toBeDisabled();
   });
 
@@ -29,7 +31,8 @@ describe("uniform v6 app shell", () => {
   });
 
   it("placeholder routes render inside the same shell, honestly", async () => {
-    renderApp(<App />, { route: "/incidents" });
+    // Cases is still a placeholder (Incidents et al. are now built).
+    renderApp(<App />, { route: "/cases" });
     expect(screen.getByRole("navigation", { name: "Main" })).toBeInTheDocument();
     expect(screen.getByText(/coming in a later phase/i)).toBeInTheDocument();
     expect(screen.getByText(/rather than invented data/i)).toBeInTheDocument();

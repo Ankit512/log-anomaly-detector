@@ -18,10 +18,10 @@ import { cn } from "@/lib/utils";
 export const NAV = [
   { to: "/", label: "Overview", icon: House, ready: true },
   { to: "/alerts", label: "Alerts", icon: Bell, ready: true },
-  { to: "/incidents", label: "Incidents", icon: TriangleAlert, ready: false },
-  { to: "/threat-intel", label: "Threat Intel", icon: Shield, ready: false },
-  { to: "/assets", label: "Assets", icon: Monitor, ready: false },
-  { to: "/reports", label: "Reports", icon: FileText, ready: false },
+  { to: "/incidents", label: "Incidents", icon: TriangleAlert, ready: true },
+  { to: "/threat-intel", label: "Threat Intel", icon: Shield, ready: true },
+  { to: "/assets", label: "Assets", icon: Monitor, ready: true },
+  { to: "/reports", label: "Reports", icon: FileText, ready: true },
   { to: "/cases", label: "Cases", icon: Folder, ready: false },
   { to: "/settings", label: "Settings", icon: Settings, ready: false },
 ] as const;
