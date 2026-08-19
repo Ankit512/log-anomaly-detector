@@ -1,4 +1,4 @@
-# itsoc web — React SOC platform (Phase A)
+# itsoc web — React SOC platform
 
 Vite + React 18 + TypeScript frontend for the log-analyzer console. It is a
 pure consumer of the existing Python backend (`console/serve.py`); it never
@@ -36,8 +36,9 @@ React Router. No CDN at runtime; all assets are local after `npm install`.
 
 - `src/components/layout/AppShell.tsx` — THE uniform shell (sidebar, topbar,
   theme toggle); every route renders inside it.
-- `src/pages/` — Overview + Alerts are live; the other sections render an
-  honest "coming in a later phase" placeholder until their backends exist.
+- `src/pages/` — Overview, Alerts, Incidents, Threat Intel, Assets, Reports,
+  Cases and Settings are all live against real backend endpoints (contract in
+  `docs/soc_subsystems.md`); each shows real data or an honest empty state.
 - `src/lib/api.ts` — the typed client for the real endpoints only.
 - `src/index.css` — all design tokens (light + dark, incl. the validated
   severity palettes) defined once.

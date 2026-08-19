@@ -5,16 +5,25 @@ deterministic rules, and uses a local LLM to explain them in plain language. **L
 leaves your machine.**
 
 Deterministic rules own severity and correlation (brute-force, failure→success compromise,
-error bursts, suspicious ports, disk pressure); the LLM explains rule-caught findings and
-surfaces anything below a rule's threshold. Supports the canonical `timestamp LEVEL host msg`
-format and real RFC 3164 syslog (sshd/PAM).
+error bursts, suspicious ports, disk pressure); the LLM only explains rule-caught findings and
+surfaces anything below a rule's threshold — it can never override, suppress, or escalate a
+verdict. On top of the detector sits a full **SOC platform**: a browser dashboard with
+Overview, Alerts, Incidents, Threat Intel, Assets, Reports and Cases — every panel showing
+real derived data or an honest empty state, never a fabricated number.
+
+Recognized log formats: the canonical `timestamp LEVEL host msg`, real **RFC 3164 syslog**
+(sshd/PAM), **ManageEngine Log360** exports (CSV + forwarded syslog), and **Android logcat**.
+Unknown formats surface an honest *"format not recognized — 0 lines parsed"* banner, never a
+false all-clear.
 
 > **Never used it before?** [`RUNBOOK.md`](RUNBOOK.md) (also as [PDF](RUNBOOK.pdf)) walks
 > through every use case step by step, for non-technical users.
 > [`GUIDE.md`](GUIDE.md) is a plain-language overview.
 > [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md) has architecture, history and roadmap.
+> [`docs/soc_subsystems.md`](docs/soc_subsystems.md) is the SOC data-model + API contract.
 
-Runs on **macOS, Linux and Windows**. Python standard library only — no `pip install`.
+Runs on **macOS, Linux and Windows**. The analysis engine is Python standard library only —
+no `pip install`. The optional React dashboard needs Node (`npm install`) once.
 
 ---
 
@@ -47,7 +56,8 @@ ollama list
 ```
 
 Ollama runs as a background service after install. If the tool later says it cannot reach
-the endpoint, start it manually with `ollama serve`.
+the endpoint, start it manually with `ollama serve`. The rules engine still runs **without**
+a model — you just get verdicts and evidence, with explanations skipped and said so honestly.
 
 ### Step 3 — this project
 
@@ -72,16 +82,55 @@ python3 console/serve.py
 ```
 
 A browser opens at **http://127.0.0.1:8765/**. Choose a bundled sample and you are running.
+This is the built-in, zero-dependency **review console** (vanilla JS, no build step).
 
 To stop it: `Ctrl-C` in the terminal.
 
 ---
 
-## 3. The review console
+## 3. Two front-ends, one backend
 
-A self-contained local web app: findings ranked by severity, per-finding evidence, the rule
-predicate that fired, an event timeline, and an integrity manifest. No build step, no
-framework, no network.
+`console/serve.py` is the single local backend (stdlib HTTP, `127.0.0.1:8765`). It owns
+analysis, saved runs, and a JSON API. Two UIs read from it:
+
+- **The review console** (`console/anomaly_console.html`) — self-contained vanilla JS served
+  at `/`. Findings ranked by severity, per-finding evidence, the rule predicate that fired, an
+  event timeline, and an integrity manifest. No build step, no framework, no network.
+- **The React SOC platform** (`web/`, "itsoc-web") — a Vite + React + TypeScript dashboard
+  that is a *pure consumer* of the same API; it never computes a severity or verdict itself.
+
+### Run the SOC dashboard (optional)
+
+```bash
+# 1. backend — the API (and the legacy console) on 127.0.0.1:8765
+python3 console/serve.py --no-open
+
+# 2. frontend — needs network once for npm install, offline after
+cd web
+npm install
+npm run dev         # http://localhost:5173  — /api/* proxies to :8765
+```
+
+The dashboard's sections, each backed by a real endpoint (contract in
+[`docs/soc_subsystems.md`](docs/soc_subsystems.md)):
+
+| Section | What it shows | Endpoint |
+|---|---|---|
+| **Overview** | KPI tiles, severity donut, alerts-over-time, top MITRE tactics, latest alerts | `/api/overview`, `/api/metrics` |
+| **Alerts** | Every finding, filterable/sortable, with the full evidence detail | `/console_state.json` |
+| **Incidents** | Correlated finding-clusters with an analyst lifecycle (`new → acknowledged → investigating → resolved`) | `/api/incidents` (+ `POST /state`) |
+| **Threat Intel** | Offline STIX indicators + each rule's MITRE technique map | `/api/threat-intel` |
+| **Assets** | Hosts/IPs and users **actually observed** in the run, with per-entity findings | `/api/assets`, `/api/users` |
+| **Reports** | Saved HTML reports, one-click generate, and **downloadable exports** (below) | `/api/reports`, `/api/export` |
+| **Cases** | Analyst-created case records (CRUD) | `/api/cases` |
+
+Everything is honest by construction: incident/asset severities are display roll-ups (rules
+still own the verdict), MITRE tags are labelled *derived, not a verdict*, and any value with
+no basis renders *n/a* rather than a zero that looks like good news.
+
+---
+
+## 4. Analyze a log
 
 ```bash
 python3 console/serve.py                                   # pick a log in the browser
@@ -93,9 +142,10 @@ python3 console/serve.py --port 8766                       # different port
 
 **Three log sources**, deliberately separated because their privacy consequences differ:
 bundled samples, a **local file** (read locally, never uploaded), and **fetch from a URL**
-(the only source that uses the network — it *downloads* public test data to you).
+(the only source that uses the network — it *downloads* public test data to you). The Upload
+button in the dashboard offers the same choice (local file **or** a link).
 
-**Results survive a restart.** Completed runs are saved locally; the **Runs** button reopens
+**Results survive a restart.** Completed runs are saved locally; the **Runs** switcher reopens
 any of them, and restarting the app restores the last one.
 
 **Compare mode (`--compare`, opt-in)** runs a second *unprimed* pass — same model, same log,
@@ -105,23 +155,30 @@ time, and the model out-rated the rules about as often.
 
 ---
 
-## 4. Share a run with someone who has nothing installed
+## 5. Export & share a run
+
+**One self-contained HTML file** — opens by double-clicking, anywhere, with **zero network
+requests** (no Python, no Ollama, no server):
 
 ```bash
 python3 console/export.py report.json -o run.html
 python3 console/export.py --latest -o run.html
 ```
 
-Or click **Download standalone** in the console.
+**Downloadable exports in five formats** from the Reports page (or directly):
 
-The result is **one HTML file** that opens by double-clicking, anywhere, with **zero network
-requests** — no Python, no Ollama, no server. Findings, evidence, rule-vs-LLM contrast,
-predicate, timeline and the integrity manifest are all inlined and still interactive
-(filters, selection, keyboard).
+```
+GET /api/export?format=csv | html | xml | json | md
+```
+
+Each is a real serialization of the current run's findings — same ids, severities, MITRE tags
+the rules produced, no fabricated rows. CSV/XML/JSON are machine-readable; HTML is the
+interactive standalone page; Markdown is a readable summary table. With no run loaded the
+endpoint returns an honest `409`, never an empty file.
 
 ---
 
-## 5. Command line
+## 6. Command line
 
 ```bash
 # Full analysis: rules + LLM explanations
@@ -134,7 +191,8 @@ python3 anomaly_detector.py --input samples/OpenSSH_2k.log --output anomalies
 # Tests (no network, no model)
 python3 tests/eval/run_eval.py             # 17/17 expected
 python3 threat_intel/test_threat_intel.py
-python3 console/test_console.py
+python3 console/test_console.py            # backend + render + subsystems + export
+cd web && npm test                         # React dashboard (vitest, jsdom)
 ```
 
 Useful flags: `--compare`, `--lines-per-chunk N` (default 25), `--deep-scan`, `--model`,
@@ -146,29 +204,43 @@ appear in ~8 seconds and explanations fill in behind a progress bar.
 
 ---
 
-## 6. Threat-intel enrichment (optional)
+## 7. Threat-intel enrichment (optional)
 
 An opt-in downstream step in [`threat_intel/`](threat_intel/) matches flagged IPs against
 threat-intel indicators and resolves each to a MITRE ATT&CK technique (a blocked outbound to
 a known C2 IP → "T1071 — Command and Control"). Offline mode (a local STIX bundle) is the
 default and needs no extra packages. See [`threat_intel/README.md`](threat_intel/README.md).
 
+When the console is pointed at a remote compute node, **every byte that leaves the machine
+passes through one redaction choke point** (`console/redact.py`) — the raw log is never
+transmitted; only redacted finding-lines go out. Local mode remains the default (no egress).
+
 ---
 
-## 7. Design constraints
+## 8. Design constraints
 
-Data stays local · no model training · read-only, no automated actions · rules are
-authoritative on severity · the validated detector (`anomaly_detector.py`) is kept effectively
-frozen, with new formats added as sibling modules · the UI never claims more than it can
-prove (integrity hashes, not signatures; "compare not run", not a fake zero; "format not
-recognized", not a false all-clear).
+Data stays local · no model training · read-only, no automated actions · **rules are
+authoritative on severity; the LLM only explains** · the validated detector
+(`anomaly_detector.py`) is kept effectively frozen (sha256 `43f0560f…8312d05`), with new
+formats added as sibling modules · `raw` is always the real log line, never a rewrite · the UI
+never claims more than it can prove (integrity hashes, not signatures; "compare not run", not a
+fake zero; "format not recognized", not a false all-clear; *n/a*, not a guessed metric).
 
-## 8. Project layout
+## 9. Project layout
 
 Full inventory in §5 of [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md). Key pieces:
-`log_analyzer.py` (analyzer + LLM), `anomaly_detector.py` (validated detector),
-`normalize.py` (syslog envelope), `rules_syslog.py` (vocabulary + dedupe),
-`rule_context.py` (rule predicate + timeline), `compare.py` (LLM-alone ablation),
-`console/` (`serve.py`, `adapter.py`, `export.py`, the review console),
-`threat_intel/` (enrichment), `tests/eval/` (labeled corpus + harness),
-`samples/` (real LogHub logs).
+
+- **Engine** — `log_analyzer.py` (analyzer + LLM), `anomaly_detector.py` (validated detector,
+  frozen), `normalize.py` (format sniff + envelope), `rules_syslog.py` (vocabulary + dedupe),
+  `rule_context.py` (rule predicate + timeline), `compare.py` (LLM-alone ablation).
+- **Formats** — `console/formats/log360.py` (Log360 CSV + syslog), `console/formats/logcat.py`
+  (Android logcat); each a sibling module feeding the record dict, never a detector edit.
+- **Backend** — `console/serve.py` (stdlib server + JSON API), `console/adapter.py`
+  (`report.json` → console state), `console/soc.py` (incidents, assets/users, cases, reports,
+  threat-intel, metrics), `console/export.py` (HTML + CSV/XML/JSON/MD exporters),
+  `console/redact.py` (egress choke point).
+- **UIs** — `console/anomaly_console.html` (vanilla-JS review console), `web/` (React SOC
+  platform).
+- **Enrichment / tests / data** — `threat_intel/` (offline STIX → MITRE), `tests/eval/`
+  (labeled corpus + harness), `console/test_console.py` (backend), `web/src/test/` (dashboard),
+  `samples/` (real LogHub logs + Log360/Android samples).
