@@ -1,14 +1,15 @@
-import { useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import {
-  Bell, Calendar, FileText, Filter, Folder, House, LogOut, Monitor,
+  Bell, FileText, Filter, Folder, House, LogOut, Monitor,
   RefreshCw, Settings, Shield, ShieldCheck, TriangleAlert, Upload,
 } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, type AnalyzeJob } from "@/lib/api";
+import { api } from "@/lib/api";
 import { RunHistory } from "@/components/RunHistory";
+import { RunDropdown } from "@/components/RunDropdown";
+import { IngestNotifier } from "@/components/IngestNotifier";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { useUi } from "@/store/ui";
+import { useJobs } from "@/store/jobs";
 import { cn } from "@/lib/utils";
 
 /** The uniform v6 shell: every route renders inside this exact frame, so the
@@ -68,70 +69,13 @@ function Sidebar() {
   );
 }
 
-/** How often the header polls /api/progress while an analysis runs. */
-const PROGRESS_POLL_MS = 1500;
-const PROGRESS_POLL_MAX = 400; // ~10 minutes — after that, say so honestly
-
 /** Header upload: the design's primary action, posting to the real
- *  /api/analyze compute path, then following /api/progress to the actual
- *  outcome. Feedback is the real job state — live stage/percent while it
- *  runs, the finding count on success, the job's own error on failure —
- *  never a fire-and-forget "started" or a fake bar. */
-
-/** What the header progress strip renders. `job` is the LAST /api/progress
- *  snapshot verbatim — the strip never invents a stage or a percentage. */
-export interface IngestView {
-  kind: "uploading" | "running" | "done" | "error";
-  file: string;
-  job?: AnalyzeJob;
-  message?: string;
-}
-
-function UploadButton({ onView }: { onView: (v: IngestView | null) => void }) {
-  const queryClient = useQueryClient();
-  const [busy, setBusy] = useState(false);
-
-  const waitForJob = async (name: string) => {
-    for (let i = 0; i < PROGRESS_POLL_MAX; i++) {
-      await new Promise((r) => setTimeout(r, PROGRESS_POLL_MS));
-      const job = await api.progress().catch(() => null);
-      if (!job) return { status: "error" as const, error: "the backend stopped answering" };
-      if (job.status !== "running") return job;
-      onView({ kind: "running", file: name, job });
-    }
-    return { status: "error" as const, error: "timed out waiting for the analysis" };
-  };
-
-  const upload = async (files: FileList | null) => {
-    if (!files?.length || busy) return;
-    setBusy(true);
-    try {
-      // One analysis at a time (the backend enforces it): files go through
-      // sequentially, each becoming a run; the last one is the current run.
-      for (const file of Array.from(files)) {
-        onView({ kind: "uploading", file: file.name });
-        const out = await api.analyzeUpload(file)
-          .catch(() => ({ ok: false as const, error: "the backend is not reachable" }));
-        if (!out.ok) {
-          onView({ kind: "error", file: file.name,
-                   message: `The server did not accept ${file.name}${out.error ? `: ${out.error}` : ""}.` });
-          continue;
-        }
-        const job = await waitForJob(file.name);
-        if (job.status === "error") {
-          onView({ kind: "error", file: file.name,
-                   message: `Analysis of ${file.name} failed: ${job.error ?? "unknown error"}` });
-          continue;
-        }
-        await queryClient.invalidateQueries();
-        onView({ kind: "done", file: file.name, job,
-                 message: `${file.name} analyzed — ${job.findings ?? 0} finding(s)`
-                   + (job.note ? ` · ${job.note}` : "") + ". Open Alerts for evidence." });
-      }
-    } finally {
-      setBusy(false);
-    }
-  };
+ *  /api/analyze path. It hands the file to the shell-level job store, which
+ *  runs the analysis as a BACKGROUND job and drives the persistent
+ *  IngestNotifier — so the upload survives navigating away from the Overview. */
+function UploadButton() {
+  const startUpload = useJobs((s) => s.startUpload);
+  const busy = useJobs((s) => s.busy);
 
   return (
     <label
@@ -146,7 +90,7 @@ function UploadButton({ onView }: { onView: (v: IngestView | null) => void }) {
       <input
         type="file" multiple className="hidden" data-testid="ingest-file"
         aria-label="Upload logs" disabled={busy}
-        onChange={(e) => { upload(e.target.files); e.target.value = ""; }}
+        onChange={(e) => { if (e.target.files) startUpload(e.target.files); e.target.value = ""; }}
       />
     </label>
   );
@@ -154,66 +98,9 @@ function UploadButton({ onView }: { onView: (v: IngestView | null) => void }) {
 
 const chip = "inline-flex items-center gap-[9px] whitespace-nowrap rounded-[10px] border bg-card px-3.5 py-2.5 text-[13.5px]";
 
-/** The full-width strip under the header while an upload analyzes: the file,
- *  the job's own stage, and a bar only when the backend reports done/total —
- *  otherwise the stage text stands alone rather than a fake percentage. */
-function IngestStrip({ view }: { view: IngestView | null }) {
-  if (!view) return null;
-
-  if (view.kind === "error" || view.kind === "done") {
-    return (
-      <p
-        role="status"
-        className="w-full rounded-md px-3 py-2 text-xs"
-        style={view.kind === "error"
-          ? { background: "color-mix(in srgb, var(--sev-critical) 12%, transparent)" }
-          : undefined}
-      >
-        {view.message}
-      </p>
-    );
-  }
-
-  const job = view.job;
-  const total = job?.total ?? 0;
-  const done = job?.done ?? 0;
-  const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null;
-
-  return (
-    <div role="status" className="flex w-full flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md bg-card px-3 py-2 text-xs shadow-card">
-      <span className="font-mono font-semibold">{view.file}</span>
-      <span className="text-muted-foreground">
-        {view.kind === "uploading" ? "uploading…" : `${job?.phase ?? "working"}…`}
-      </span>
-      {pct !== null && (
-        <>
-          <span
-            role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}
-            aria-label="analysis progress"
-            className="h-1.5 min-w-24 flex-1 overflow-hidden rounded-full bg-muted"
-          >
-            <span className="block h-full rounded-full"
-                  style={{ width: `${pct}%`, background: "hsl(var(--primary))" }} />
-          </span>
-          <span className="tabular-nums text-muted-foreground">{done}/{total} · {pct}%</span>
-        </>
-      )}
-      {(job?.findings ?? 0) > 0 && (
-        <span className="tabular-nums text-muted-foreground">{job!.findings} finding(s) so far</span>
-      )}
-      {job?.etaSeconds != null && (
-        <span className="tabular-nums text-muted-foreground">~{job.etaSeconds}s left</span>
-      )}
-      {job?.note && <span className="w-full text-muted-foreground">{job.note}</span>}
-    </div>
-  );
-}
-
 function Header() {
   const { pathname } = useLocation();
-  const timeWindow = useUi((s) => s.timeWindow);
   const queryClient = useQueryClient();
-  const [ingest, setIngest] = useState<IngestView | null>(null);
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -224,14 +111,8 @@ function Header() {
         <div className="mt-px text-sm font-medium text-accent-foreground">Security Overview</div>
       </div>
       <div className="ml-auto flex flex-wrap items-center gap-2.5">
-        <UploadButton onView={setIngest} />
-        <span
-          className={cn(chip, "text-muted-foreground")}
-          title="The current run's own window. History-window filtering does not exist yet, so this states what is shown rather than offering a choice."
-        >
-          <Calendar className="h-4 w-4" strokeWidth={1.8} aria-hidden />
-          {timeWindow}
-        </span>
+        <UploadButton />
+        <RunDropdown />
         <RunHistory />
         <button className={cn(chip, "cursor-pointer hover:bg-background")}
                 onClick={() => queryClient.invalidateQueries()}>
@@ -245,7 +126,6 @@ function Header() {
         </button>
         <ThemeToggle />
       </div>
-      <IngestStrip view={ingest} />
     </div>
   );
 }
@@ -300,6 +180,9 @@ export function AppShell() {
         {pathname === "/" && <RunFacts />}
         <Outlet />
       </main>
+      {/* Shell-level: the upload runs as a background job and its notification
+          persists across navigation, independent of any page. */}
+      <IngestNotifier />
     </div>
   );
 }

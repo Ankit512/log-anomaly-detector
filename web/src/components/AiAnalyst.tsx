@@ -1,6 +1,5 @@
-import { useState } from "react";
-import { useMutation } from "@tanstack/react-query";
-import { Bot, Send, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Bot, Send, Square, X } from "lucide-react";
 import { api } from "@/lib/api";
 
 interface Msg { who: "q" | "a" | "err"; text: string }
@@ -11,35 +10,85 @@ const EXAMPLES = [
   "Summarize today's threats",
 ];
 
+/** No first token within this long is treated as an honest timeout — small
+ *  models on CPU are slow, but silence past this means something is wrong. */
+const FIRST_TOKEN_TIMEOUT_MS = 90_000;
+
 /** The v6 floating analyst: a bottom-right FAB opening a chat panel over
- *  /api/ask. Advisory only — the model explains, it never changes a severity
- *  or verdict — and an unreachable backend is an honest error, not silence. */
+ *  /api/ask, STREAMING the reply token-by-token so a slow local model shows
+ *  progress instead of hanging on "thinking…". Advisory only — the model
+ *  explains, it never changes a severity or verdict — with an elapsed timer,
+ *  a Stop control, and an honest timeout/error if the model never answers. */
 export function AiAnalyst({ model }: { model?: string }) {
   const [open, setOpen] = useState(false);
   const [log, setLog] = useState<Msg[]>([]);
   const [draft, setDraft] = useState("");
+  const [streaming, setStreaming] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
+  const [gotFirstToken, setGotFirstToken] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const startRef = useRef(0);
 
-  const askMut = useMutation({
-    mutationFn: api.ask,
-    onSuccess: (out) => {
-      setLog((l) => [...l, out.answer
-        ? { who: "a", text: out.answer }
-        : { who: "err", text: out.error ?? "The analyst backend returned no answer." }]);
-    },
-    onError: () => {
-      setLog((l) => [...l, {
-        who: "err",
-        text: "The analyst backend is not reachable — start the console server (and Ollama) to use this.",
-      }]);
-    },
-  });
+  // Elapsed timer while a reply streams.
+  useEffect(() => {
+    if (!streaming) return;
+    const t = setInterval(() => setElapsed(Math.floor((Date.now() - startRef.current) / 1000)), 250);
+    return () => clearInterval(t);
+  }, [streaming]);
 
-  const ask = (q: string) => {
+  const stop = () => { abortRef.current?.abort(); };
+
+  const ask = async (q: string) => {
     const question = q.trim();
-    if (!question) return;
-    setLog((l) => [...l, { who: "q", text: question }]);
+    if (!question || streaming) return;
     setDraft("");
-    askMut.mutate(question);
+    setLog((l) => [...l, { who: "q", text: question }, { who: "a", text: "" }]);
+    const answerIndex = log.length + 1; // the empty "a" slot we just appended
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+    startRef.current = Date.now();
+    setElapsed(0);
+    setGotFirstToken(false);
+    setStreaming(true);
+
+    // Honest timeout: if no first token arrives, abort and say so.
+    let first = false;
+    const timeout = setTimeout(() => {
+      if (!first) controller.abort("timeout");
+    }, FIRST_TOKEN_TIMEOUT_MS);
+
+    try {
+      await api.askStream(question, (delta) => {
+        if (!first) { first = true; setGotFirstToken(true); }
+        setLog((l) => {
+          const next = [...l];
+          const cur = next[answerIndex];
+          if (cur && cur.who === "a") next[answerIndex] = { who: "a", text: cur.text + delta };
+          return next;
+        });
+      }, controller.signal);
+    } catch (e) {
+      const aborted = controller.signal.aborted;
+      const reason = controller.signal.reason;
+      const msg = aborted
+        ? (reason === "timeout"
+            ? "The model did not start answering in time — it may be loading or overloaded. Try again."
+            : "Stopped.")
+        : `The analyst backend is not reachable — ${(e as Error).message}`;
+      setLog((l) => {
+        const next = [...l];
+        const cur = next[answerIndex];
+        // Replace an empty answer bubble with the notice; keep partial text.
+        if (cur && cur.who === "a" && !cur.text) next[answerIndex] = { who: "err", text: msg };
+        else next.push({ who: "err", text: msg });
+        return next;
+      });
+    } finally {
+      clearTimeout(timeout);
+      setStreaming(false);
+      abortRef.current = null;
+    }
   };
 
   return (
@@ -80,34 +129,54 @@ export function AiAnalyst({ model }: { model?: string }) {
                 ))}
               </div>
             )}
-            {log.map((m, i) => (
-              <div
-                key={i}
-                className={
-                  m.who === "q" ? "max-w-[95%] self-end whitespace-pre-wrap rounded-[10px] bg-accent px-[11px] py-2 text-accent-foreground"
-                  : m.who === "err" ? "max-w-[95%] whitespace-pre-wrap rounded-[10px] px-[11px] py-2"
-                  : "max-w-[95%] whitespace-pre-wrap rounded-[10px] bg-background px-[11px] py-2 text-muted-foreground"
-                }
-                style={m.who === "err"
-                  ? { background: "color-mix(in srgb, var(--sev-critical) 14%, transparent)" }
-                  : undefined}
-              >
-                {m.text}
-              </div>
-            ))}
-            {askMut.isPending && <p className="px-1 text-muted-foreground">thinking…</p>}
+            {log.map((m, i) => {
+              const isStreamingAnswer = streaming && m.who === "a" && i === log.length - 1;
+              return (
+                <div
+                  key={i}
+                  className={
+                    m.who === "q" ? "max-w-[95%] self-end whitespace-pre-wrap rounded-[10px] bg-accent px-[11px] py-2 text-accent-foreground"
+                    : m.who === "err" ? "max-w-[95%] whitespace-pre-wrap rounded-[10px] px-[11px] py-2"
+                    : "max-w-[95%] whitespace-pre-wrap rounded-[10px] bg-background px-[11px] py-2 text-muted-foreground"
+                  }
+                  style={m.who === "err"
+                    ? { background: "color-mix(in srgb, var(--sev-critical) 14%, transparent)" }
+                    : undefined}
+                >
+                  {m.text}
+                  {isStreamingAnswer && !m.text && (
+                    <span className="text-muted-foreground">
+                      {gotFirstToken ? "" : `waiting for the model… ${elapsed}s`}
+                    </span>
+                  )}
+                  {isStreamingAnswer && m.text && <span className="animate-pulse">▍</span>}
+                </div>
+              );
+            })}
           </div>
+          {streaming && (
+            <div className="flex items-center gap-2 text-[11.5px] text-muted-foreground">
+              <span className="tabular-nums">streaming · {elapsed}s</span>
+              <button
+                onClick={stop}
+                className="ml-auto inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11.5px] hover:border-primary"
+              >
+                <Square className="h-3 w-3" aria-hidden /> Stop
+              </button>
+            </div>
+          )}
           <form className="flex gap-2" onSubmit={(e) => { e.preventDefault(); ask(draft); }}>
             <input
               value={draft}
               onChange={(e) => setDraft(e.target.value)}
               placeholder="Ask anything about your logs..."
               aria-label="Ask the AI analyst"
-              className="min-w-0 flex-1 rounded-lg border bg-card px-[11px] py-[9px] text-[13px]"
+              disabled={streaming}
+              className="min-w-0 flex-1 rounded-lg border bg-card px-[11px] py-[9px] text-[13px] disabled:opacity-60"
             />
             <button
-              type="submit" aria-label="Send"
-              className="inline-flex w-9 items-center justify-center rounded-lg border border-primary bg-primary text-primary-foreground hover:opacity-90"
+              type="submit" aria-label="Send" disabled={streaming}
+              className="inline-flex w-9 items-center justify-center rounded-lg border border-primary bg-primary text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
               <Send className="h-[15px] w-[15px]" aria-hidden />
             </button>
