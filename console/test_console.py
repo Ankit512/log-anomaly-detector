@@ -2383,6 +2383,150 @@ def check_serve_react():
     return 0 if all(results) else 1
 
 
+def check_store():
+    """The persistent SOC Command Center store (console/store.py) + /api/store/*.
+
+    Unit level: idempotent init, insert+query roundtrip per table, event dedupe,
+    retention cleanup, secret masking. HTTP level (live socket): honest-empty
+    reads, filtered reads, metrics, settings secret-masking, and purge requiring
+    an explicit confirm. Runs against a temp DB — never the real .soc store.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import store
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nSOC Command Center store (console/store.py + /api/store/*):")
+
+    real = (store.SOC_DIR, store.DB_PATH)
+    try:
+        with tempfile.TemporaryDirectory(prefix="soc-store-test-") as tmp:
+            store.SOC_DIR = Path(tmp)
+            store.DB_PATH = Path(tmp) / "soc_history.db"
+
+            # --- unit: idempotent init + insert/query roundtrip --------------
+            store.init_db()
+            store.init_db()          # must not raise or duplicate schema
+            check("init_db is idempotent", True)
+
+            new1 = store.insert_event({"ts": "2026-08-19T01:00:00+00:00", "source": "auth.log",
+                                       "severity": "HIGH", "src_ip": "203.0.113.44",
+                                       "raw": "failed login for admin"})
+            dup = store.insert_event({"ts": "2026-08-19T01:00:00+00:00", "source": "auth.log",
+                                      "severity": "HIGH", "src_ip": "203.0.113.44",
+                                      "raw": "failed login for admin"})
+            store.insert_event({"ts": "2026-08-19T02:00:00+00:00", "source": "sys",
+                                "severity": "CRITICAL", "raw": "kernel panic"})
+            check("insert_event returns True for a new row, False on dedupe",
+                  new1 is True and dup is False)
+
+            store.insert_asset({"ip": "10.0.0.5", "hostname": "app-01", "status": "UP"})
+            store.insert_vuln({"asset_ip": "10.0.0.5", "name": "OpenSSL", "severity": "HIGH",
+                               "cvss": 7.5, "status": "OPEN"})
+            store.insert_ioc({"ioc": "203.0.113.44", "ioc_type": "IP", "verdict": "malicious"})
+            store.insert_ioc({"ioc": "8.8.8.8", "ioc_type": "IP", "verdict": "clean"})
+
+            evs = store.query("events")
+            check("events roundtrip: 2 stored, dedupe held", evs["total"] == 2, str(evs["total"]))
+            check("events keep raw verbatim",
+                  any(i["raw"] == "kernel panic" for i in evs["items"]))
+            check("filtered query (severity=HIGH) returns one",
+                  store.query("events", filters={"severity": "HIGH"})["total"] == 1)
+            check("free-text q matches message/raw",
+                  store.query("events", q="panic")["total"] == 1)
+            check("assets + vulns + iocs roundtrip",
+                  store.query("assets")["total"] == 1
+                  and store.query("vulnerabilities")["total"] == 1
+                  and store.query("iocs")["total"] == 2)
+
+            # --- unit: severity is source-reported, never guessed ------------
+            m = store.metrics()
+            check("metrics count SOURCE-REPORTED critical/high, openVulns, iocHits (malicious only)",
+                  m == {"events": 2, "critical": 1, "high": 1, "assets": 1,
+                        "openVulns": 1, "iocHits": 1}, str(m))
+
+            # --- unit: secret masking ---------------------------------------
+            store.set_setting("retention_days", "30")
+            store.set_setting("virustotal_api_key", "SECRET-XYZ")
+            pub = store.public_settings()
+            check("non-secret setting is returned", pub["settings"].get("retention_days") == "30")
+            check("secret setting value is NEVER returned (only presence)",
+                  "virustotal_api_key" not in pub["settings"]
+                  and pub["secrets"].get("virustotal_api_key") is True)
+            check("server-side get_setting can still read the secret",
+                  store.get_setting("virustotal_api_key") == "SECRET-XYZ")
+
+            # --- unit: retention cleanup drops old rows ----------------------
+            store.insert_event({"ts": "2000-01-01T00:00:00+00:00", "source": "old", "raw": "ancient"})
+            before = store.query("events")["total"]
+            deleted = store.cleanup(days=365)
+            after = store.query("events")["total"]
+            check("cleanup(days) drops rows older than the cutoff",
+                  after == before - 1 and deleted["events"] == 1,
+                  f"before={before} after={after} deleted={deleted['events']}")
+
+            # --- HTTP: honest-empty, shapes, secret mask, purge-confirm ------
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}{path}") as r:
+                    return r.status, json.loads(r.read())
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            status, body = get("/api/store/events")
+            check("GET /api/store/events returns {items,total,...}",
+                  status == 200 and set(body) >= {"items", "total", "limit", "offset"})
+            check("GET /api/store/vulns maps to the vulnerabilities table",
+                  get("/api/store/vulns")[1]["total"] == 1)
+            check("GET /api/store/metrics returns the KPI shape",
+                  set(get("/api/store/metrics")[1]) ==
+                  {"events", "critical", "high", "assets", "openVulns", "iocHits"})
+            check("GET /api/store/connectors never leaks raw config",
+                  all("config_json" not in it for it in get("/api/store/connectors")[1]["items"]))
+            check("GET /api/store/settings masks secrets over HTTP too",
+                  "virustotal_api_key" not in get("/api/store/settings")[1]["settings"])
+
+            # purge requires an explicit confirm
+            s_noconfirm, _ = post("/api/store/purge", {})
+            check("POST /api/store/purge without confirm -> 400", s_noconfirm == 400, str(s_noconfirm))
+            s_ok, purged = post("/api/store/purge", {"confirm": True})
+            check("POST /api/store/purge {confirm:true} wipes the data tables",
+                  s_ok == 200 and get("/api/store/events")[1]["total"] == 0)
+
+            # honest-empty after purge
+            check("reads are honest-empty after purge",
+                  get("/api/store/events")[1]["items"] == []
+                  and get("/api/store/metrics")[1]["events"] == 0)
+
+            srv.shutdown()
+    finally:
+        store.SOC_DIR, store.DB_PATH = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2429,12 +2573,13 @@ def main():
     subsystems = check_soc_subsystems()
     export_ = check_export()
     react = check_serve_react()
+    store_ = check_store()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
-            or layout or allruns or soc or subsystems or export_ or react):
+            or layout or allruns or soc or subsystems or export_ or react or store_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store checks green")
     return 0
 
 

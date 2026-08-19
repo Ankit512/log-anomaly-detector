@@ -57,6 +57,7 @@ import adapter  # noqa: E402
 import export  # noqa: E402
 import redact  # noqa: E402
 import soc  # noqa: E402
+import store  # noqa: E402  # persistent SOC Command Center store (console/store.py)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -1018,6 +1019,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(soc.threat_intel_summary())
         elif path == "/api/metrics":
             self._json(soc.metrics(STATE, [r.get("label") for r in list_runs()]))
+        # --- persistent SOC Command Center store (console/store.py) ---------
+        elif path.startswith("/api/store/"):
+            self._store_get(path)
         elif path.startswith("/api/"):
             # An unknown /api path is a real 404 — never fall through to the SPA
             # (that would return HTML for a missing endpoint and mask the bug).
@@ -1101,8 +1105,78 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             STATE = {"idle": True}
             CURRENT_RUN_FILE = None
             self._json(STATE)
+        elif path.startswith("/api/store/"):
+            self._store_post(path)
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
+
+    # -----------------------------------------------------------------------
+    # SOC Command Center store routes (console/store.py). Read endpoints return
+    # an honest empty {items: []} when a table is empty; secrets are never
+    # returned. See docs/soc_command_center.md for the full contract.
+    # -----------------------------------------------------------------------
+    _STORE_TABLES = {
+        "events": "events", "assets": "assets", "vulns": "vulnerabilities",
+        "iocs": "iocs", "connectors": "connectors",
+    }
+
+    def _store_get(self, path):
+        store.init_db()
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+
+        def one(key, default=None):
+            v = qs.get(key)
+            return v[0] if v else default
+
+        name = path[len("/api/store/"):]
+        if name in self._STORE_TABLES:
+            reserved = {"q", "since", "until", "limit", "offset"}
+            filters = {k: v[0] for k, v in qs.items() if k not in reserved and v}
+            return self._json(store.query(
+                self._STORE_TABLES[name], filters=filters, q=one("q"),
+                since=one("since"), until=one("until"),
+                limit=one("limit", 100), offset=one("offset", 0)))
+        if name == "settings":
+            return self._json(store.public_settings())
+        if name == "metrics":
+            return self._json(store.metrics())
+        self.send_error(404, "unknown store endpoint")
+
+    def _store_post(self, path):
+        store.init_db()
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._json({"error": "invalid JSON body"}, 400)
+        if not isinstance(payload, dict):
+            return self._json({"error": "body must be a JSON object"}, 400)
+
+        name = path[len("/api/store/"):]
+        if name == "settings":
+            items = payload.get("settings")
+            if not isinstance(items, dict):
+                if "key" in payload:
+                    items = {payload["key"]: payload.get("value", "")}
+                else:
+                    return self._json(
+                        {"error": 'provide {"settings": {...}} or {"key","value"}'}, 400)
+            for k, v in items.items():
+                store.set_setting(str(k), v)
+            return self._json(store.public_settings())
+        if name == "cleanup":
+            try:
+                days = payload.get("days")
+                deleted = store.cleanup(None if days is None else int(days))
+            except (TypeError, ValueError):
+                return self._json({"error": "days must be an integer"}, 400)
+            return self._json({"deleted": deleted, "retentionDays": store.retention_days()})
+        if name == "purge":
+            if payload.get("confirm") is not True:
+                return self._json(
+                    {"error": 'purge wipes ALL stored data — resend with {"confirm": true}'}, 400)
+            return self._json({"purged": store.purge()})
+        self.send_error(404, "unknown store endpoint")
 
     do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
 
@@ -1513,6 +1587,7 @@ def main():
     args = ap.parse_args()
 
     global STATE, CURRENT_RUN_FILE
+    store.init_db()   # ensure the SOC Command Center store exists before serving
     with tempfile.TemporaryDirectory(prefix="anomaly-console-") as tmp:
         WORKDIR = tmp
         try:
