@@ -245,6 +245,47 @@ export interface ComputeInput {
   apiKey?: string;
 }
 
+// --- Live syslog collector (socf-syslog) ---
+// The real state of the background UDP/TCP listener. `exposed` is true only
+// when bound to 0.0.0.0 (reachable from the network) — the UI warns on it.
+export interface SyslogStatus {
+  running: boolean;
+  bind: string;
+  port: number;
+  protocols: string[];
+  exposed: boolean;
+  receivedCount: number;
+  storedCount: number;
+  startedAt: string | null;
+  lastEventAt: string | null;
+  error: string;
+}
+export interface SyslogStart {
+  port: number;
+  bind: string;
+}
+
+// One row from the persistent store's `events` table (the fields the collector
+// panel shows to confirm received syslog actually landed). `severity` is the
+// SOURCE-REPORTED level, never a verdict.
+export interface StoreEvent {
+  id: number;
+  ts: string;
+  source: string;
+  source_type: string;
+  host: string;
+  src_ip: string;
+  severity: string;
+  message: string;
+  raw: string;
+}
+export interface StoreEventsPage {
+  items: StoreEvent[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -428,5 +469,33 @@ export const api = {
     const body = await res.json().catch(() => ({}));
     return res.ok ? { ok: true, config: body as ComputeConfig }
                   : { ok: false, error: body.error ?? `HTTP ${res.status}` };
+  },
+
+  // --- Syslog collector (socf-syslog) ---
+  // Poll the REAL listener state; start/stop the background UDP+TCP listener.
+  // A failed start (bad/privileged port, in use) comes back as an honest error.
+  syslogStatus: () => getJson<SyslogStatus>("/api/syslog/status"),
+
+  /** Recent events from the persistent store, filtered to the syslog collector,
+   *  newest first — used to confirm received messages actually landed. */
+  syslogEvents: (limit = 15) =>
+    getJson<StoreEventsPage>(`/api/store/events?source_type=syslog&limit=${limit}`),
+
+  syslogStart: async (input: SyslogStart): Promise<{ ok: boolean; status?: SyslogStatus; error?: string }> => {
+    const res = await fetch("/api/syslog/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, status: body as SyslogStatus }
+                  : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  },
+
+  syslogStop: async (): Promise<{ ok: boolean; status?: SyslogStatus; error?: string }> => {
+    const res = await fetch("/api/syslog/stop", { method: "POST" });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, status: body as SyslogStatus }
+                  : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
   },
 };

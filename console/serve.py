@@ -58,6 +58,7 @@ import export  # noqa: E402
 import redact  # noqa: E402
 import soc  # noqa: E402
 import store  # noqa: E402  # persistent SOC Command Center store (console/store.py)
+import syslog_collector  # noqa: E402  # live syslog listener -> store (socf-syslog)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
@@ -1022,6 +1023,9 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         # --- persistent SOC Command Center store (console/store.py) ---------
         elif path.startswith("/api/store/"):
             self._store_get(path)
+        # --- live syslog collector (socf-syslog; console/syslog_collector.py)
+        elif path == "/api/syslog/status":
+            self._json(syslog_collector.COLLECTOR.status())
         elif path.startswith("/api/"):
             # An unknown /api path is a real 404 — never fall through to the SPA
             # (that would return HTML for a missing endpoint and mask the bug).
@@ -1107,6 +1111,11 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(STATE)
         elif path.startswith("/api/store/"):
             self._store_post(path)
+        # --- live syslog collector (socf-syslog) ---------------------------
+        elif path == "/api/syslog/start":
+            self._syslog_start()
+        elif path == "/api/syslog/stop":
+            self._json(syslog_collector.COLLECTOR.stop())
         else:
             self.send_error(405, "This console only accepts POST /api/analyze")
 
@@ -1177,6 +1186,36 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
                     {"error": 'purge wipes ALL stored data — resend with {"confirm": true}'}, 400)
             return self._json({"purged": store.purge()})
         self.send_error(404, "unknown store endpoint")
+
+    # -----------------------------------------------------------------------
+    # Live syslog collector (socf-syslog; console/syslog_collector.py). Binding
+    # a listener is a network surface: the default bind is loopback (127.0.0.1)
+    # and 0.0.0.0 is an explicit opt-in that exposes the port to the network.
+    # Received messages land in the store verbatim; severity is the syslog PRI
+    # level (source-reported), never guessed. Status reflects the REAL state.
+    # -----------------------------------------------------------------------
+    def _syslog_start(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            payload = json.loads(self.rfile.read(length) or b"{}")
+        except (ValueError, json.JSONDecodeError):
+            return self._json({"error": "invalid JSON body"}, 400)
+        if not isinstance(payload, dict):
+            return self._json({"error": "body must be a JSON object"}, 400)
+
+        port = payload.get("port", 1514)
+        bind = str(payload.get("bind", "127.0.0.1")).strip()
+        # Only loopback or the explicit all-interfaces opt-in are accepted — an
+        # arbitrary bind address is refused rather than silently coerced.
+        if bind not in ("127.0.0.1", "localhost", "0.0.0.0"):
+            return self._json(
+                {"error": 'bind must be "127.0.0.1" (loopback) or "0.0.0.0" '
+                          "(exposes the port to the network)"}, 400)
+
+        status = syslog_collector.COLLECTOR.start(port=port, bind=bind)
+        # A bind that failed is a client-actionable error (bad port / in use /
+        # privileged) — surface it as 400 with the honest reason, not a fake OK.
+        return self._json(status, 200 if status.get("running") else 400)
 
     do_PUT = do_DELETE = lambda self: self.send_error(405, "read-only")
 
