@@ -2817,6 +2817,181 @@ def check_discovery():
     return 0 if all(results) else 1
 
 
+def check_ti_oem():
+    """TI enrichment (OTX/AbuseIPDB) + OEM polling (console/ti_oem.py + /api/ti,
+    /api/oem/*).
+
+    Credentials posture: keys/tokens are user-supplied, stored via set_setting,
+    and NEVER returned to the browser (presence flags only). Verdicts/severity
+    come from the provider's / vendor's REAL response, never keyword-guessed.
+    Honest states: no key -> 'not configured' and no call; a placeholder/failed
+    OEM poll stores nothing and reports the real error. Uses local stub servers
+    for the success paths (real urllib), against a temp store DB.
+    """
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.server
+    import threading
+    import urllib.error
+    import urllib.request
+    import store
+    import ti_oem
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nTI enrichment + OEM polling (console/ti_oem.py + /api/ti, /api/oem/*):")
+
+    real = (store.SOC_DIR, store.DB_PATH)
+    real_bases = (ti_oem.OTX_BASE, ti_oem.ABUSE_BASE)
+    try:
+        with tempfile.TemporaryDirectory(prefix="ti-oem-test-") as tmp:
+            store.SOC_DIR = Path(tmp)
+            store.DB_PATH = Path(tmp) / "soc_history.db"
+            store.init_db()
+
+            # --- TI unit: no key -> honest not-configured, nothing stored ----
+            r = ti_oem.enrich_ip("8.8.8.8")
+            check("enrich with NO key -> both providers not-configured, no call",
+                  set(r["notConfigured"]) == {"OTX", "AbuseIPDB"} and not r["results"], str(r))
+            check("enrich with no key stores no IOC", store.query("iocs")["total"] == 0)
+            check("enrich of an invalid IP -> honest error",
+                  ti_oem.enrich_ip("nope").get("error") == "not a valid IP address")
+
+            # --- TI success via a local stub (real urllib), verdict from data -
+            class Prov(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    if "/indicators/IPv4/" in self.path:
+                        body = json.dumps({"pulse_info": {"count": 7}}).encode()
+                    else:
+                        body = json.dumps({"data": {"abuseConfidenceScore": 80}}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *a):
+                    pass
+
+            psrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Prov)
+            pport = psrv.server_address[1]
+            threading.Thread(target=psrv.serve_forever, daemon=True).start()
+            ti_oem.OTX_BASE = ti_oem.ABUSE_BASE = f"http://127.0.0.1:{pport}"
+            store.set_setting("otx_api_key", "OTX-SECRET-1")
+            store.set_setting("abuseipdb_api_key", "ABUSE-SECRET-1")
+            r2 = ti_oem.enrich_ip("203.0.113.9")
+            by = {x["provider"]: x for x in r2["results"]}
+            check("OTX verdict derives from the real pulse count (7 pulses -> malicious)",
+                  by.get("OTX", {}).get("verdict") == "malicious" and by["OTX"]["score"] == 70.0,
+                  str(by.get("OTX")))
+            check("AbuseIPDB verdict derives from the real confidence (80 -> malicious)",
+                  by.get("AbuseIPDB", {}).get("verdict") == "malicious" and by["AbuseIPDB"]["score"] == 80.0,
+                  str(by.get("AbuseIPDB")))
+            check("real enrichment stores IOCs", store.query("iocs")["total"] == 2)
+            pub = store.public_settings()
+            check("provider keys are NEVER returned to the browser (presence only)",
+                  "OTX-SECRET-1" not in json.dumps(pub) and pub["secrets"].get("otx_api_key") is True,
+                  str(pub["secrets"]))
+            psrv.shutdown()
+
+            # --- OEM: connector CRUD + masked token --------------------------
+            v = ti_oem.create_connector(
+                "Cisco Firepower",
+                {"vendor": "cisco", "baseUrl": "https://FIREPOWER", "eventsPath": "/api/fdm/v6/events"},
+                enabled=True, interval=30, token="CISCO-TOKEN-9")
+            check("OEM connector is created with a masked token (hasToken, no value)",
+                  v["hasToken"] is True and v["enabled"] is True, str(v))
+            lst = ti_oem.list_connectors()
+            check("connector list NEVER exposes the token value or config blob",
+                  "CISCO-TOKEN-9" not in json.dumps(lst) and "FIREPOWER" not in json.dumps(lst),
+                  str(lst))
+            # A plain disable (config={}) must PRESERVE the stored config/token.
+            ti_oem.create_connector("Cisco Firepower", {}, enabled=False)
+            cfg = ti_oem._read_config("Cisco Firepower")
+            check("enable/disable preserves the stored base URL (config not wiped)",
+                  cfg and cfg.get("baseUrl") == "https://FIREPOWER", str(cfg))
+
+            # A placeholder base URL is refused with an honest error, no events.
+            p = ti_oem.poll_connector("Cisco Firepower")
+            check("poll of a placeholder base URL -> honest error, stores nothing",
+                  p["ok"] is False and p["stored"] == 0 and "placeholder" in p["error"], str(p))
+
+            # --- OEM: real stub events endpoint, source-reported severity ----
+            class Ev(http.server.BaseHTTPRequestHandler):
+                def do_GET(self):
+                    body = json.dumps({"events": [
+                        {"ts": "2026-08-19T17:00:00Z", "severity": "HIGH", "host": "fw1",
+                         "src_ip": "10.1.1.1", "message": "blocked flow"},
+                        {"severity": "", "message": "info only"},
+                    ]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.end_headers()
+                    self.wfile.write(body)
+
+                def log_message(self, *a):
+                    pass
+
+            esrv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ev)
+            eport = esrv.server_address[1]
+            threading.Thread(target=esrv.serve_forever, daemon=True).start()
+            ti_oem.create_connector(
+                "TestOEM", {"vendor": "cisco", "baseUrl": f"http://127.0.0.1:{eport}",
+                            "eventsPath": "/events"}, enabled=True, interval=30, token="T")
+            p2 = ti_oem.poll_connector("TestOEM")
+            check("a real OEM poll stores the vendor's events", p2["ok"] and p2["stored"] == 2, str(p2))
+            evs = store.query("events", filters={"source_type": "oem:cisco"})
+            sev = sorted(e["severity"] for e in evs["items"])
+            check("OEM event severity is source-reported (HIGH kept, missing stays empty)",
+                  sev == ["", "HIGH"], str(sev))
+            check("OEM event raw is the verbatim vendor JSON",
+                  all(e["raw"].startswith("{") for e in evs["items"]))
+            esrv.shutdown()
+
+            # --- HTTP routes -------------------------------------------------
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), serve.ConsoleHandler)
+            hport = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            def get(path):
+                with urllib.request.urlopen(f"http://127.0.0.1:{hport}{path}") as r:
+                    return r.status, json.loads(r.read())
+
+            def post(path, obj):
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{hport}{path}", data=json.dumps(obj).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req) as r:
+                        return r.status, json.loads(r.read())
+                except urllib.error.HTTPError as e:
+                    return e.code, json.loads(e.read())
+
+            s_keys, keys = get("/api/ti/keys")
+            check("GET /api/ti/keys reports presence only (no values)",
+                  s_keys == 200 and keys.get("otx") is True and keys.get("abuseipdb") is True, str(keys))
+            s_conn, conns = get("/api/oem/connectors")
+            check("GET /api/oem/connectors returns safe rows (no token/config)",
+                  s_conn == 200 and "CISCO-TOKEN-9" not in json.dumps(conns), str(s_conn))
+            s_poll, poll = post("/api/oem/poll", {"name": "does-not-exist"})
+            check("POST /api/oem/poll on an unknown connector -> 404",
+                  s_poll == 404, str(s_poll))
+            s_bad, bad = post("/api/oem/connectors", {"name": ""})
+            check("POST /api/oem/connectors with no name -> 400 honest error",
+                  s_bad == 400 and bad.get("error"), str(bad))
+            srv.shutdown()
+    finally:
+        ti_oem.OTX_BASE, ti_oem.ABUSE_BASE = real_bases
+        store.SOC_DIR, store.DB_PATH = real
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -2866,14 +3041,15 @@ def main():
     store_ = check_store()
     syslog_ = check_syslog()
     discovery_ = check_discovery()
+    ti_oem_ = check_ti_oem()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
             or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_ or discovery_):
+            or syslog_ or discovery_ or ti_oem_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog + discovery checks green")
+          "+ syslog + discovery + ti-oem checks green")
     return 0
 
 

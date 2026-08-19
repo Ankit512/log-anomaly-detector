@@ -351,6 +351,62 @@ export interface StoreVulnsPage {
   offset: number;
 }
 
+// --- TI enrichment + OEM polling (socf-ti-oem) ---
+// All keys/tokens are user-supplied and stored secret-masked — the browser only
+// ever learns whether one is present (hasKey/hasToken), never the value.
+// Verdicts/severity come from the provider's / vendor's real response.
+export interface TiKeyStatus { otx: boolean; abuseipdb: boolean }
+
+// One row from the store's `iocs` table — a real provider lookup result.
+export interface StoreIoc {
+  id: number;
+  ts: string;
+  ioc: string;
+  ioc_type: string;
+  provider: string;
+  score: number;
+  verdict: string;
+  details: string;
+  source_event_id: number | null;
+}
+export interface StoreIocsPage {
+  items: StoreIoc[]; total: number; limit: number; offset: number;
+}
+
+/** POST /api/ti/enrich result. A provider with no key set is listed in
+ *  `notConfigured` (not called); a failed call is in `errors` with the real
+ *  reason; only real hits are in `results`. `error` is set for an invalid IP. */
+export interface TiEnrichResult {
+  ip: string;
+  error?: string;
+  results: StoreIoc[];
+  errors: { provider: string; error: string }[];
+  notConfigured: string[];
+}
+
+/** Browser-safe OEM connector view — presence flags only, never the config
+ *  blob or the token. `lastRun`/`lastError` are the REAL poll outcome. */
+export interface OemConnector {
+  name: string;
+  kind: string;
+  enabled: boolean;
+  interval: number | null;
+  lastRun: string | null;
+  lastError: string;
+  hasConfig: boolean;
+  hasToken: boolean;
+}
+export interface OemConnectorInput {
+  name: string;
+  config: { vendor?: string; baseUrl?: string; eventsPath?: string };
+  enabled?: boolean;
+  interval?: number;
+  token?: string;
+}
+export interface OemPollResult {
+  name: string; ok: boolean; stored: number; error: string;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await fetch(url, { cache: "no-store" });
   if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
@@ -592,4 +648,70 @@ export const api = {
    *  NSE-reported CVSS band (empty = unknown), never keyword-guessed. */
   vulns: (limit = 200) =>
     getJson<StoreVulnsPage>(`/api/store/vulns?limit=${limit}`),
+
+  // --- TI enrichment + OEM polling (socf-ti-oem) ---
+  // Keys/tokens are user-supplied and stored masked; the browser only sees
+  // presence. Verdicts come from real provider/vendor responses — never faked.
+  tiKeys: () => getJson<TiKeyStatus>("/api/ti/keys"),
+
+  /** Enrich one IP via every configured provider. An unconfigured provider is
+   *  reported (not called); a failed call carries the real error; only real
+   *  hits are stored + returned. Read the full IOC history from /api/store/iocs. */
+  tiEnrich: async (ip: string): Promise<TiEnrichResult> => {
+    const res = await fetch("/api/ti/enrich", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok && !(body as TiEnrichResult).ip) {
+      throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
+    return body as TiEnrichResult;
+  },
+
+  /** Store an IOC lookup value (masked secret) via the store settings endpoint.
+   *  Used to save the OTX / AbuseIPDB API keys — the value is write-only. */
+  setTiKey: async (which: "otx" | "abuseipdb", value: string): Promise<TiKeyStatus> => {
+    const key = which === "otx" ? "otx_api_key" : "abuseipdb_api_key";
+    await fetch("/api/store/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key, value }),
+    });
+    return getJson<TiKeyStatus>("/api/ti/keys");
+  },
+
+  /** IOC lookups from the persistent store, newest first. A verdict of
+   *  malicious/suspicious is a hit; the score is the provider's real number. */
+  iocs: (limit = 200) =>
+    getJson<StoreIocsPage>(`/api/store/iocs?limit=${limit}`),
+
+  oemConnectors: () => getJson<{ connectors: OemConnector[] }>("/api/oem/connectors"),
+
+  oemCreateConnector: async (
+    input: OemConnectorInput,
+  ): Promise<{ ok: boolean; connector?: OemConnector; error?: string }> => {
+    const res = await fetch("/api/oem/connectors", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+    const body = await res.json().catch(() => ({}));
+    return res.ok ? { ok: true, connector: body as OemConnector }
+                  : { ok: false, error: (body as { error?: string }).error ?? `HTTP ${res.status}` };
+  },
+
+  /** Poll one connector now. A placeholder base URL or a failed call is an
+   *  honest error that stores nothing — never a fabricated event. */
+  oemPoll: async (name: string): Promise<OemPollResult> => {
+    const res = await fetch("/api/oem/poll", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`);
+    return body as OemPollResult;
+  },
 };

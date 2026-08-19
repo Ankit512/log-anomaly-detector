@@ -7,6 +7,8 @@ import { ThreatIntel } from "@/pages/ThreatIntel";
 import { Assets } from "@/pages/Assets";
 import { Discovery } from "@/pages/Discovery";
 import { Vulnerabilities } from "@/pages/Vulnerabilities";
+import { Enrichment } from "@/pages/Enrichment";
+import { OemEngine } from "@/pages/OemEngine";
 import { Reports } from "@/pages/Reports";
 import { Cases } from "@/pages/Cases";
 import { Settings } from "@/pages/Settings";
@@ -25,6 +27,8 @@ export default function App() {
         <Route path="assets" element={<Assets />} />
         <Route path="discovery" element={<Discovery />} />
         <Route path="vulnerabilities" element={<Vulnerabilities />} />
+        <Route path="enrichment" element={<Enrichment />} />
+        <Route path="oem" element={<OemEngine />} />
         <Route path="reports" element={<Reports />} />
         <Route path="cases" element={<Cases />} />
         <Route path="settings" element={<Settings />} />
