@@ -497,6 +497,18 @@ ASK_SYSTEM = (
     'Reply as JSON: {"answer": "<your answer>"}.'
 )
 
+# The streaming path renders tokens as they arrive, so the reply must be plain
+# prose — a JSON wrapper would leak braces into the stream. Same advisory
+# framing and same read-only contract as ASK_SYSTEM, minus the JSON envelope.
+ASK_SYSTEM_STREAM = (
+    "You are an advisory SOC analyst assistant for a local log-analysis console. "
+    "Answer the reviewer's question using ONLY the findings summary provided. "
+    "Severities and verdicts were assigned by deterministic rules and are final: "
+    "you explain and advise, you never change, suppress, or escalate them. "
+    "If the summary does not hold the answer, say so plainly. "
+    "Reply in plain prose — no JSON, no code fences."
+)
+
 
 def ask_analyst(question, state=None, compute=None):
     """One advisory answer about the CURRENT findings. Read-only by design.
@@ -507,6 +519,20 @@ def ask_analyst(question, state=None, compute=None):
     explanations — before leaving. The reply is prose for a human; nothing
     here writes to STATE, severities, or verdicts.
     """
+    base, key, model, user = _ask_prompt(question, state, compute)
+    reply = la.strip_fences(la.chat_completion(base, key, model, ASK_SYSTEM, user))
+    try:                       # chat_completion asks for a JSON object reply
+        answer = json.loads(reply).get("answer")
+    except (json.JSONDecodeError, AttributeError):
+        answer = None
+    return (answer or reply).strip()
+
+
+def _ask_prompt(question, state=None, compute=None):
+    """Build the (base, key, model, user) for one analyst question — the shared
+    summary + redaction both the blocking and streaming paths use. The summary
+    carries finding metadata only (severity, rule, title, host, time), never
+    raw log text; remote compute routes it through the redaction choke point."""
     state = STATE if state is None else state
     compute = COMPUTE if compute is None else compute
     question = str(question)[:2000]
@@ -531,12 +557,14 @@ def ask_analyst(question, state=None, compute=None):
         base, key, model = la.LLM_BASE_URL, la.LLM_API_KEY, la.LLM_MODEL
 
     user = "Findings summary:\n" + "\n".join(parts) + f"\n\nQuestion: {question}"
-    reply = la.strip_fences(la.chat_completion(base, key, model, ASK_SYSTEM, user))
-    try:                       # chat_completion asks for a JSON object reply
-        answer = json.loads(reply).get("answer")
-    except (json.JSONDecodeError, AttributeError):
-        answer = None
-    return (answer or reply).strip()
+    return base, key, model, user
+
+
+def ask_analyst_stream(question, state=None, compute=None):
+    """Yield the analyst reply as prose chunks (advisory, read-only). Same
+    summary/redaction as ask_analyst; only the delivery differs."""
+    base, key, model, user = _ask_prompt(question, state, compute)
+    yield from la.chat_completion_stream(base, key, model, ASK_SYSTEM_STREAM, user)
 
 
 def carry_marks(previous, state):
@@ -1085,6 +1113,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
         if STATE.get("idle"):
             return self._json({"error": "no run yet — analyze a log first, "
                                         "then ask about its findings"}, 409)
+        if payload.get("stream"):
+            return self._ask_stream(question)
         try:
             answer = ask_analyst(question)
         except Exception as e:
@@ -1092,6 +1122,40 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             return self._json({"error": f"the analyst model is not reachable: {e}"}, 502)
         print(f"  analyst asked: {question[:60]!r}", flush=True)
         return self._json({"answer": answer})
+
+    def _ask_stream(self, question):
+        """Stream the analyst reply as Server-Sent Events: one `{"delta": ...}`
+        per token, a final `{"done": true}`, or `{"error": ...}` if the model
+        is unreachable. The client can cancel by dropping the connection — the
+        write then fails and we simply stop. Nothing here is fabricated: an
+        empty stream ends honestly, an unreachable model is an error event."""
+        print(f"  analyst asked (stream): {question[:60]!r}", flush=True)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        def send(obj):
+            self.wfile.write(f"data: {json.dumps(obj)}\n\n".encode())
+            self.wfile.flush()
+
+        try:
+            any_token = False
+            for chunk in ask_analyst_stream(question):
+                any_token = True
+                send({"delta": chunk})
+            if not any_token:
+                send({"delta": "(the model returned an empty reply)"})
+            send({"done": True})
+        except (BrokenPipeError, ConnectionResetError):
+            # The client cancelled — stop quietly; nothing was fabricated.
+            return
+        except Exception as e:
+            try:
+                send({"error": f"the analyst model is not reachable: {e}"})
+            except OSError:
+                pass
 
     def _set_compute(self):
         """Switch where explanations compute. Never changes what runs locally."""

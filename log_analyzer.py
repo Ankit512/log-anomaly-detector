@@ -299,6 +299,50 @@ def chat_completion(base_url, api_key, model, system, user, timeout=300):
     return body["choices"][0]["message"]["content"]
 
 
+def chat_completion_stream(base_url, api_key, model, system, user, timeout=300):
+    """Yield reply-text chunks from an OpenAI-compatible /chat/completions with
+    stream:true (Ollama supports this on its /v1 endpoint).
+
+    Prose, not JSON: streaming a `{"answer": ...}` wrapper would leak braces
+    into the reader token-by-token, so the caller passes a prose system prompt.
+    Each SSE `data:` line carries a delta; `[DONE]` ends the stream. The reply
+    is still the model's real output — this only changes WHEN it arrives, never
+    what it says, and it never touches severities or verdicts."""
+    payload = json.dumps({
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": LLM_TEMPERATURE,
+        "stream": True,
+    }).encode()
+
+    req = urllib.request.Request(
+        f"{base_url}/chat/completions",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        for raw in resp:
+            line = raw.decode("utf-8", "replace").strip()
+            if not line or not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if data == "[DONE]":
+                break
+            try:
+                obj = json.loads(data)
+                delta = obj["choices"][0]["delta"].get("content")
+            except (json.JSONDecodeError, KeyError, IndexError):
+                continue
+            if delta:
+                yield delta
+
+
 def strip_fences(text):
     """Defensive cleanup in case the model wraps in fences despite instructions."""
     return text.replace("```json", "").replace("```", "").strip()

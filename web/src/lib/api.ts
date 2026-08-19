@@ -166,6 +166,50 @@ export const api = {
     return res.json();
   },
 
+  /** Stream the analyst reply token-by-token over SSE. `onDelta` fires per
+   *  chunk; resolves when the model sends `done`. Pass an AbortSignal to
+   *  cancel — the backend stops when the connection drops. Errors (unreachable
+   *  model, HTTP failure, or an `error` event) reject honestly. */
+  askStream: async (
+    question: string,
+    onDelta: (text: string) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const res = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, stream: true }),
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error ?? `HTTP ${res.status}`);
+    }
+    if (!res.body) throw new Error("this browser cannot read a streamed reply");
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line.
+      let sep: number;
+      while ((sep = buffer.indexOf("\n\n")) !== -1) {
+        const frame = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        const line = frame.split("\n").find((l) => l.startsWith("data:"));
+        if (!line) continue;
+        const evt = JSON.parse(line.slice(5).trim()) as
+          { delta?: string; done?: boolean; error?: string };
+        if (evt.error) throw new Error(evt.error);
+        if (evt.done) return;
+        if (evt.delta) onDelta(evt.delta);
+      }
+    }
+  },
+
   analyzeUpload: async (file: File): Promise<{ ok: boolean; error?: string }> => {
     const form = new FormData();
     form.append("file", file);
