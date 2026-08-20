@@ -1,0 +1,27 @@
+{
+  "log": "tests/eval/fixtures/Linux_bruteforce_slice.log",
+  "note": "Hand-labeled 2026-08-20 by dwight. Attacker IPs and failure counts were read directly from the raw 'authentication failure'/'Failed password' lines in the slice (NOT copied from detector output). An analyst calls a source with many rapid auth failures a brute-force attack; a single stray failure is benign and is deliberately left unlabeled so precision (no-false-fire) is actually exercised.",
+  "expected": [
+    {
+      "rule_id": "auth_bruteforce",
+      "severity": "high",
+      "entity": "218.188.2.4",
+      "evidence_lines": [1, 42],
+      "note": "14 authentication failures for user 'unknown' from this rhost"
+    },
+    {
+      "rule_id": "auth_bruteforce",
+      "severity": "high",
+      "entity": "65.166.159.14",
+      "evidence_lines": [169, 187],
+      "note": "10 authentication failures for user 'unknown' from this rhost"
+    },
+    {
+      "rule_id": "auth_bruteforce",
+      "severity": "high",
+      "entity": "217.60.212.66",
+      "evidence_lines": [193, 198],
+      "note": "6 authentication failures for user 'guest' from this rhost"
+    }
+  ]
+}
