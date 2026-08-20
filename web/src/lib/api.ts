@@ -71,6 +71,10 @@ export interface ConsoleState {
   findings: Finding[];
   manifest?: { detector_sha256?: string | null; ruleset?: string | null } & Record<string, unknown>;
   sourceLabel?: string;
+  /** Absolute path of the analyzed log on the server — the value GET
+   *  /api/stream accepts for tailing the CURRENT run's log (the backend
+   *  whitelist is bundled samples + an exact match on this path). */
+  logPath?: string;
   /** Set when the model endpoint was down: the run is rules-only (verdicts
    *  complete, advisory explanations skipped) and this says so. */
   llmNote?: string | null;
