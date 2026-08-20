@@ -487,6 +487,13 @@ def threat_intel_lookup(client, ip, bundle_path=None):
         return _error(client, f"'{ip}' is not a valid IPv4 address")
 
     detector_sha = best_effort_detector_sha(client)
+
+    # FAIL CLOSED in a standalone install: the offline path reuses the repo's
+    # threat_intel/ package. If it is not importable, say so honestly — never a
+    # fabricated match and never a fake all-clear.
+    if not tio.threat_intel_available():
+        return _error(client, tio.UNAVAILABLE_MSG, detector_sha)
+
     path = tio.bundle_path(bundle_path)
     if not path:
         return {
@@ -501,14 +508,18 @@ def threat_intel_lookup(client, ip, bundle_path=None):
 
     try:
         objects = tio.load_objects(path)
+    except tio.ThreatIntelUnavailable:
+        return _error(client, tio.UNAVAILABLE_MSG, detector_sha)
     except FileNotFoundError:
         return _error(client, f"STIX bundle not found: {path}", detector_sha)
     except (ValueError, OSError) as e:
         return _error(client, f"could not read STIX bundle {path}: {e}", detector_sha)
 
-    mapper, mapper_note = tio.build_mapper()
     try:
+        mapper, mapper_note = tio.build_mapper()
         matches = tio.match_ip(ip, objects, mapper)
+    except tio.ThreatIntelUnavailable:
+        return _error(client, tio.UNAVAILABLE_MSG, detector_sha)
     except Exception as e:                           # pragma: no cover - defensive
         return _error(client, f"offline threat-intel match failed: {e}", detector_sha)
 

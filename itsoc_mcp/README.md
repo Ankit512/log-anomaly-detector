@@ -107,27 +107,42 @@ It asserts each tool's shape, that `get_evidence`/`get_findings`/`explain_findin
 are **redacted by default** and raw only with `ITSOC_MCP_TRUSTED_LOCAL=1`, and
 that idle/unrecognized/error states return honest errors, not empty payloads.
 
-## Packaging & the standalone limitation (honest)
+## Standalone install (`uvx` / `pipx`)
 
 `pyproject.toml` builds an `itsoc-mcp` distribution with an `itsoc-mcp` console
 script (`itsoc_mcp.server:main`) and pins `mcp>=1.0,<2` — MCP clients speak the
-stable 1.x API; mcp 2.0 changed the server API. `python -m build` produces a wheel
-whose entry point resolves.
+stable 1.x API; mcp 2.0 changed the server API. The package is **self-contained**:
+it runs with no repo checkout.
 
-The **supported way to run it is from the repo root** (`python -m itsoc_mcp`, or
-the console script with the repo importable), because two tools delegate to repo
-siblings on purpose rather than duplicating logic:
+```sh
+uvx itsoc-mcp        # or: pipx run itsoc-mcp   (the backend must still be running)
+```
 
-- `redaction.py` imports `console/redact.py` — the single masking implementation,
-  so the egress guard can never drift from the rest of the project. If it can't
-  import, the server fails **closed** (it won't start and can't leak), never open.
-- `threat_intel_lookup` reads the sibling `threat_intel/` offline path.
+Two honesty points, stated plainly:
 
-So a **standalone** install outside the repo (e.g. bare `uvx itsoc-mcp`) cannot
-currently run — this is stated plainly rather than hidden. A true standalone
-release would require vendoring `console/redact.py` into the package (and guarding
-`threat_intel_lookup`), which is a deliberate, human-gated decision; see
-[`PUBLISHING.md`](PUBLISHING.md).
+- **The egress guard is never weakened standalone.** Redaction has a single source
+  of truth — `console/redact.py` — used whenever the repo is importable. In a bare
+  install it falls back to a **verbatim vendored mirror** (`_redact_vendored.py`)
+  that masks identically (redact-by-default; raw only with
+  `ITSOC_MCP_TRUSTED_LOCAL=1`). A drift-guard test asserts the two never diverge,
+  so the vendored copy can never silently mask *less*. `redaction.redact_source()`
+  reports which is active. If neither could load, the module fails to import rather
+  than pass text through — it fails **closed**, never open.
+- **`threat_intel_lookup` needs the repo.** Its offline STIX→MITRE path reuses the
+  repo's sibling `threat_intel/` package, which a bare install does not ship. In a
+  standalone install that one tool **fails closed** with an honest
+  "offline threat-intel unavailable … NOT a clean verdict / not an all-clear"
+  message — never a fabricated match or a fake all-clear. Run from the repo
+  (`python -m itsoc_mcp`) to use offline threat-intel. Every other tool is a client
+  of the backend API and works identically standalone or in-repo.
+
+Standalone means *no repo checkout is needed for the MCP package* — the backend
+(`python3 console/serve.py`) still runs separately and must be reachable at
+`ITSOC_BASE_URL`.
+
+## License
+
+MIT — see the repository's top-level [`LICENSE`](../LICENSE).
 
 ## License
 

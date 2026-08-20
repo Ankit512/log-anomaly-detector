@@ -1,28 +1,47 @@
 """redaction.py — the egress guard for anything leaving this MCP server.
 
 An MCP client may be a cloud agent, so raw log text must NOT leave by default.
-Every field that can carry raw log lines passes through the project's existing
-choke point (console/redact.py — the SAME masking the remote-compute path uses)
-before it is returned, UNLESS the operator explicitly opts out for a trusted
-local session by setting ITSOC_MCP_TRUSTED_LOCAL=1.
+Every field that can carry raw log lines passes through the project's masking
+choke point before it is returned, UNLESS the operator explicitly opts out for a
+trusted local session by setting ITSOC_MCP_TRUSTED_LOCAL=1.
 
-This module does NOT reimplement masking — it delegates to console.redact so
-there is one masking implementation in the project, not two that can drift.
+SINGLE SOURCE OF TRUTH, WITH A SAFE FALLBACK
+    In the repo, this delegates to console/redact.py — the SAME masking the
+    remote-compute path uses — so there is one implementation, not two that can
+    drift. When the package is installed STANDALONE (uvx/pipx, no repo on path),
+    console/redact.py is not importable, so it falls back to a VERBATIM vendored
+    mirror (itsoc_mcp/_redact_vendored.py). The fallback keeps the guard exactly
+    as strong standalone as in-repo; a drift-guard test asserts the two never
+    diverge (see test_mcp.py). We NEVER silently ship a weaker masker: if neither
+    import succeeds, module import fails loudly rather than passing text through.
 """
 
 import os
 import sys
 from pathlib import Path
 
-# console/redact.py lives at the repo root's `console` package. When this server
-# is launched as `python -m itsoc_mcp` from the repo root, the root is already on
-# sys.path; add it defensively so redaction never silently fails to import (which
-# would be the one failure mode we must never have — leaking unredacted text).
+# When launched as `python -m itsoc_mcp` from the repo root the root is already on
+# sys.path; add it defensively so the in-repo path (single source of truth) is
+# preferred whenever the repo is actually present.
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from console import redact as _redact   # noqa: E402  (path set up above)
+# Prefer the repo's choke point; fall back to the vendored mirror when standalone.
+# `_redact_source` names which is active (surfaced to the drift-guard test).
+try:
+    from console import redact as _redact   # noqa: E402  (path set up above)
+    _redact_source = "console.redact"
+except ImportError:
+    from . import _redact_vendored as _redact  # noqa: E402
+    _redact_source = "itsoc_mcp._redact_vendored"
+
+
+def redact_source():
+    """Which masking implementation is active: 'console.redact' in-repo, or the
+    vendored mirror when installed standalone. Behaviour is identical either way."""
+    return _redact_source
+
 
 TRUSTED_ENV = "ITSOC_MCP_TRUSTED_LOCAL"
 

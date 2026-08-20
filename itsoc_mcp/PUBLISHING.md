@@ -23,13 +23,15 @@ left to a person.
 uvx itsoc-mcp        # or: pipx run itsoc-mcp
 ```
 
-> **Precondition, stated honestly:** the server delegates to repo siblings
-> (`console/redact.py` for the egress guard; `threat_intel/` for the offline
-> lookup), so today it must run **from the repo root** (`python -m itsoc_mcp`).
-> A bare `uvx itsoc-mcp` outside the repo will fail **closed** (it cannot leak).
-> Publishing a genuinely standalone distribution first requires vendoring
-> `console/redact.py` into the package and guarding `threat_intel_lookup` — a
-> deliberate, human-approved change, not done here.
+> **Standalone, stated honestly:** the package is self-contained and runs from a
+> bare `uvx itsoc-mcp` install (verified in a clean out-of-repo venv). Two caveats:
+> (1) the **backend still runs separately** — `python3 console/serve.py`, reachable
+> at `ITSOC_BASE_URL`; "standalone" means no repo checkout for the *MCP package*,
+> not a backend-free server. (2) `threat_intel_lookup` reuses the repo's
+> `threat_intel/` package and so **fails closed** with an honest "unavailable"
+> message in a bare install (never a fake match); run from the repo to use it. The
+> egress guard is never weaker standalone — redaction uses `console/redact.py`
+> in-repo and a drift-guarded verbatim vendored mirror otherwise.
 
 ## Paste-ready MCP client registration (stdio)
 
@@ -56,11 +58,17 @@ Optional `env` additions: `"ITSOC_MCP_TRUSTED_LOCAL": "1"` to return raw
 `"ITSOC_STIX_BUNDLE": "/path/to/bundle.json"` for `threat_intel_lookup`. The
 backend (`python3 console/serve.py`) must be running.
 
+The block above (`python -m itsoc_mcp`, `cwd` = repo root) gives the **full** tool
+set. A **standalone** registration also works — `"command": "uvx"`,
+`"args": ["itsoc-mcp"]`, no `cwd` needed — with the single caveat that
+`threat_intel_lookup` fails closed (offline-TI needs the repo). Everything else is
+identical.
+
 ## Pre-submission checklist (for the human)
 
 - [ ] Confirm the LICENSE copyright holder name (currently "Ankit Kumar").
-- [ ] Decide whether to vendor `console/redact.py` for a standalone release, or
-      publish as a repo-local server only.
 - [ ] `python -m build` from `itsoc_mcp/` and verify the wheel entry point.
-- [ ] `python3 itsoc_mcp/test_mcp.py` green.
+- [ ] `python3 itsoc_mcp/test_mcp.py` green (includes the redaction drift-guard).
+- [ ] Confirmed: installs + runs in a clean out-of-repo venv, redaction masks by
+      default via the vendored mirror, `threat_intel_lookup` fails closed.
 - [ ] Only then: PyPI upload and/or MCP-registry submission.
