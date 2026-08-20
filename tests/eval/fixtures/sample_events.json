@@ -1,0 +1,11 @@
+{
+  "events": [
+    {"timestamp": "2026-08-20T09:00:01", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:00:12", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:00:24", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:00:37", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:00:49", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:01:02", "level": "WARNING", "host": "app-01", "message": "auth failed for user 'root' from 203.0.113.9"},
+    {"timestamp": "2026-08-20T09:05:00", "level": "INFO", "host": "app-01", "message": "nightly backup completed"}
+  ]
+}

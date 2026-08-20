@@ -49,6 +49,7 @@ from pathlib import Path
 # correlation can run over formats its own regexes were never written for.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import normalize  # noqa: E402
+import formats_universal  # noqa: E402  broadened multi-format ingestion (native-first)
 import rule_context  # noqa: E402
 import rules_syslog  # noqa: E402
 from anomaly_detector import detect, to_llm_context  # noqa: E402
@@ -637,7 +638,16 @@ def preflight(base_url, api_key, model):
 
 def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         base_url: str, api_key: str, compare: bool = False, deep_scan: bool = False,
-        rules_only: bool = False):
+        rules_only: bool = False, unrecognized_mode: str = None):
+    # unrecognized_mode selects how a GENUINELY-unrecognized input is handled:
+    #   "honest" (default) -> keep the 0-parsed "format not recognized" report,
+    #                         detect() is fed no synthetic records (repo guardrail).
+    #   "force"            -> parse everything as generic text and let detect()
+    #                         run on it (records are adapted so it never crashes;
+    #                         severity stays source-reported, never fabricated).
+    # Recognized native formats and structured inputs (json/csv/xml/html/windows/
+    # evtx) are parsed the same way in either mode. Default comes from the
+    # LOG_ANALYZER_UNRECOGNIZED_MODE env var, else "honest".
     # rules_only is a COMPUTE switch, not an analysis switch: the deterministic
     # pass below runs identically; only the model calls (and their preflight)
     # are skipped. The console uses it when explanations are produced later
@@ -651,12 +661,19 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         sys.exit(1)
 
     # --- Deterministic pre-pass: rules run over the WHOLE file before any LLM call ---
-    records, stats = normalize.load(path)
+    # Native-first ingestion (normalize.load) with structured fallbacks; an
+    # empty file still returns 0-parsed "empty" stats so the honest report below
+    # is always written (never an early return without a report).
+    records, stats = formats_universal.load_log_file(path, mode=unrecognized_mode)
     print(f"Format: {stats['format']} — {stats['parsed']}/{stats['total_lines']} line(s) parsed"
           + (f", {stats['unparsed']} unparsed" if stats["unparsed"] else ""))
     if stats["unparsed"]:
         for raw in stats["unparsed_examples"][:3]:
             print(f"    unparsed: {raw[:88]}")
+    if stats.get("forced_unrecognized"):
+        print("WARNING: FORMAT NOT RECOGNIZED — parsed as generic text (force default). "
+              "0 findings here is NOT an all-clear; re-run with --unrecognized-mode honest "
+              "to refuse unreadable input instead.")
 
     extra_anomalies = []
     if stats["format"] == "rfc3164":
@@ -921,6 +938,8 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "endpoint": base_url,
         "temperature": LLM_TEMPERATURE,
         "ruleset": RULESET_VERSION,
+        "format": stats["format"],
+        "forced_unrecognized": bool(stats.get("forced_unrecognized")),
         "lines_parsed": stats["parsed"],
         "lines_unparsed": stats["unparsed"],
         "input_sha256": file_sha256(path),
@@ -975,6 +994,10 @@ def write_markdown_report(report: dict, path: str):
 
     lines = []
     lines.append(f"# Log Analysis Report\n")
+    if report.get("forced_unrecognized"):
+        lines.append("> **⚠ FORMAT NOT RECOGNIZED — parsed as generic text (force mode).** "
+                     "0 findings is **NOT an all-clear**: the tool could not interpret this "
+                     "file's format and read it line-by-line as plain text.\n")
     lines.append(f"**Source:** `{report['source_file']}`  ")
     lines.append(f"**Generated:** {report['generated_at']}  ")
     lines.append(f"**Model:** {report.get('model', 'n/a')}  ")
@@ -1054,7 +1077,16 @@ if __name__ == "__main__":
                         help="Ask the model about every chunk, not just those with a "
                              "rule finding. Finds sub-threshold notes anywhere in the "
                              "file; cost then scales with file size, not findings.")
+    parser.add_argument("--unrecognized-mode", choices=("honest", "force"), default=None,
+                        help="How to handle a GENUINELY-unrecognized input. 'force' "
+                             "(default; also $LOG_ANALYZER_UNRECOGNIZED_MODE) parses "
+                             "everything as generic text and runs the detector on it "
+                             "(never fabricates severity; the report carries a 'format not "
+                             "recognized — NOT an all-clear' caution). 'honest' instead "
+                             "refuses unreadable input: 0 lines parsed, no detector on "
+                             "synthetic records. Structured formats parse the same way either way.")
     args = parser.parse_args()
 
     run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY,
-        compare=args.compare, deep_scan=args.deep_scan, rules_only=args.rules_only)
+        compare=args.compare, deep_scan=args.deep_scan, rules_only=args.rules_only,
+        unrecognized_mode=args.unrecognized_mode)
