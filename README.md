@@ -190,6 +190,8 @@ endpoint returns an honest `409`, never an empty file.
 
 ## 6. MCP server (optional)
 
+[![PyPI](https://img.shields.io/pypi/v/itsoc-mcp)](https://pypi.org/project/itsoc-mcp/) · **Published** to the [official MCP Registry](https://registry.modelcontextprotocol.io) as `io.github.Ankit512/itsoc-mcp` — install standalone with **`uvx itsoc-mcp`** (the backend still runs separately; see the note below).
+
 `itsoc_mcp/` is a **read-only** [MCP](https://modelcontextprotocol.io) server that exposes this
 project's existing analysis to an MCP-capable agent (Claude Code / Desktop). It is honest and
 local by design: it is a **client** of the running backend (`http://127.0.0.1:8765`) and
@@ -207,6 +209,9 @@ core still runs with no `pip install`:
 pip install -r itsoc_mcp/requirements-mcp.txt   # the mcp SDK only
 python3 console/serve.py                         # the backend must be running
 python -m itsoc_mcp                              # speak MCP over stdio (from the repo root)
+
+# Or, published & standalone (no repo checkout needed for the MCP package):
+uvx itsoc-mcp                                    # backend must still run; threat_intel_lookup degrades honestly
 ```
 
 See [`itsoc_mcp/README.md`](itsoc_mcp/README.md) for the full tool reference, the environment
