@@ -25,3 +25,4 @@ graphify-out/
 # itsoc_mcp caches
 itsoc_mcp/__pycache__/
 itsoc_mcp/_tmp_sample.log
+itsoc_mcp/_tmp_ti/

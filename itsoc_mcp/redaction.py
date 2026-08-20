@@ -53,3 +53,15 @@ def redact_text(text, hosts=(), users=()):
     if trusted_local():
         return text
     return _redact.redact_text(text, hosts=hosts, users=users)
+
+
+def redact_batch(strings, hosts=(), users=()):
+    """Mask several strings in ONE shared scope, so the same value maps to the
+    same placeholder across all of them (e.g. an IP in an evidence line and in a
+    timeline label both become [IP-1]). Pass-through only with the trusted-local
+    opt-out. Returns a list of strings, same length/order as the input."""
+    strings = [("" if s is None else str(s)) for s in (strings or [])]
+    if trusted_local():
+        return strings
+    r = _redact.Redactor(hosts=hosts, users=users)
+    return [r.redact(s) for s in strings]
