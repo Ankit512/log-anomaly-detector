@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { api, type Finding } from "@/lib/api";
+import { useLogStream, type LogStream } from "@/lib/useLogStream";
 import { sevVar, SEV_ORDER } from "@/lib/severity";
 import { SeverityBadge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -51,6 +52,85 @@ const columns = [
 /** Virtualize only past this row count: below it, plain rendering is simpler,
  *  and a small list should never depend on measured viewport height. */
 const VIRTUALIZE_AT = 100;
+
+/** Live tail of the current run's log via GET /api/stream (SSE). Streaming
+ *  AUGMENTS the 5s polling — when the stream is down the panel says so and
+ *  polling carries on; nothing is interpolated client-side. A gap marker is
+ *  rendered wherever the server dropped events under backpressure: hiding it
+ *  would fake a quiet log. */
+function LiveTail({ stream }: { stream: LogStream }) {
+  const recent = stream.rows.slice(-200);
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <CardTitle className="text-[14px]">Live tail</CardTitle>
+          {stream.connected ? (
+            <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground"
+                  data-testid="stream-status">
+              <span aria-hidden className="h-2 w-2 rounded-full"
+                    style={{ background: "var(--sev-low)" }} />
+              streaming — lines appear as the log grows
+            </span>
+          ) : (
+            <span className="text-[11px] text-muted-foreground" data-testid="stream-status">
+              {stream.unsupported
+                ? "streaming unavailable in this browser — "
+                : "stream disconnected — "}
+              5s polling fallback active
+            </span>
+          )}
+          {stream.dropped > 0 && (
+            <span className="ml-auto rounded-md border px-2 py-0.5 text-[11px] font-semibold"
+                  style={{
+                    borderColor: "var(--sev-high)",
+                    background: "color-mix(in srgb, var(--sev-high) 14%, transparent)",
+                  }}
+                  data-testid="stream-dropped">
+              {stream.dropped} event(s) dropped under backpressure
+            </span>
+          )}
+        </div>
+      </CardHeader>
+      <CardContent>
+        {recent.length === 0 ? (
+          <p className="text-xs text-muted-foreground">
+            No new lines yet — the tail starts at the end of the current log and
+            shows only what arrives after connecting.
+          </p>
+        ) : (
+          <div className="max-h-[30vh] overflow-auto rounded-md border bg-muted/50 font-mono text-[11.5px]"
+               data-testid="live-tail">
+            {recent.map((row, i) =>
+              row.kind === "gap" ? (
+                <div key={`gap-${i}`} data-testid="gap-row"
+                     className="border-b px-3 py-1 text-[11px] font-semibold last:border-0"
+                     style={{ background: "color-mix(in srgb, var(--sev-high) 12%, transparent)" }}>
+                  {row.dropped} event(s) dropped here (stream backpressure) — the log
+                  itself is intact; a reconnect resumes from the last delivered line
+                </div>
+              ) : (
+                <div key={row.event.n} data-testid="tail-row"
+                     className="flex gap-3 border-b px-3 py-1 last:border-0">
+                  <span className="w-12 flex-none text-right text-muted-foreground">
+                    {row.event.n}
+                  </span>
+                  <span className="w-[72px] flex-none text-muted-foreground">
+                    {row.event.ts ? row.event.ts.slice(11, 19) : "n/a"}
+                  </span>
+                  <span className="w-[72px] flex-none font-semibold"
+                        style={{ color: sevVar(row.event.bucket) }}>
+                    {row.event.bucket}
+                  </span>
+                  <span className="flex-1 whitespace-pre-wrap break-all">{row.event.raw}</span>
+                </div>
+              ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function FindingDetail({ f }: { f: Finding }) {
   return (
@@ -141,10 +221,22 @@ export function Alerts() {
   const [filter, setFilter] = useState("");
   const [sevFilter, setSevFilter] = useState("");
 
-  const findings = useMemo(() => {
-    const all = data?.findings ?? [];
-    return sevFilter ? all.filter((f) => f.sev === sevFilter) : all;
-  }, [data, sevFilter]);
+  // Live SSE tail of the run's log. Streams only when the state names its
+  // source file; otherwise the hook is inert and 5s polling stands alone.
+  const stream = useLogStream(data && !data.idle ? data.logPath : undefined);
+
+  const allFindings = useMemo(() => {
+    const base = data?.findings ?? [];
+    // Streamed findings the loaded run does not already show. Same rule +
+    // same summary = the same detector verdict, so those are not repeated.
+    const live = stream.findings.filter(
+      (f) => !base.some((b) => b.type === f.type && b.title === f.title));
+    return [...base, ...live];
+  }, [data, stream.findings]);
+
+  const findings = useMemo(
+    () => (sevFilter ? allFindings.filter((f) => f.sev === sevFilter) : allFindings),
+    [allFindings, sevFilter]);
 
   const table = useReactTable({
     data: findings,
@@ -204,6 +296,8 @@ export function Alerts() {
     <div className="space-y-4">
       <UnrecognizedBanner state={data} />
 
+      {data.logPath && <LiveTail stream={stream} />}
+
       <div className="flex flex-wrap items-center gap-2">
         <Input
           className="w-72"
@@ -222,7 +316,7 @@ export function Alerts() {
           {SEV_ORDER.map((s) => <option key={s}>{s}</option>)}
         </select>
         <span className="text-xs text-muted-foreground">
-          {rows.length} of {data.findings.length} finding(s) · {data.runParsed ?? ""}
+          {rows.length} of {allFindings.length} finding(s) · {data.runParsed ?? ""}
         </span>
       </div>
 
