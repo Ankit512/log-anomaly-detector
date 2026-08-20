@@ -106,3 +106,29 @@ python3 itsoc_mcp/test_mcp.py
 It asserts each tool's shape, that `get_evidence`/`get_findings`/`explain_finding`
 are **redacted by default** and raw only with `ITSOC_MCP_TRUSTED_LOCAL=1`, and
 that idle/unrecognized/error states return honest errors, not empty payloads.
+
+## Packaging & the standalone limitation (honest)
+
+`pyproject.toml` builds an `itsoc-mcp` distribution with an `itsoc-mcp` console
+script (`itsoc_mcp.server:main`) and pins `mcp>=1.0,<2` — MCP clients speak the
+stable 1.x API; mcp 2.0 changed the server API. `python -m build` produces a wheel
+whose entry point resolves.
+
+The **supported way to run it is from the repo root** (`python -m itsoc_mcp`, or
+the console script with the repo importable), because two tools delegate to repo
+siblings on purpose rather than duplicating logic:
+
+- `redaction.py` imports `console/redact.py` — the single masking implementation,
+  so the egress guard can never drift from the rest of the project. If it can't
+  import, the server fails **closed** (it won't start and can't leak), never open.
+- `threat_intel_lookup` reads the sibling `threat_intel/` offline path.
+
+So a **standalone** install outside the repo (e.g. bare `uvx itsoc-mcp`) cannot
+currently run — this is stated plainly rather than hidden. A true standalone
+release would require vendoring `console/redact.py` into the package (and guarding
+`threat_intel_lookup`), which is a deliberate, human-gated decision; see
+[`PUBLISHING.md`](PUBLISHING.md).
+
+## License
+
+MIT — see the repository's top-level [`LICENSE`](../LICENSE).

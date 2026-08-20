@@ -1,0 +1,54 @@
+# Packaging for the OPTIONAL itsoc read-only MCP server.
+#
+# This packages ONLY itsoc_mcp/. The core backend (`python3 console/serve.py`)
+# stays stdlib-only and is NOT packaged or affected by this file — installing
+# this pulls in the `mcp` SDK for the optional server, nothing more.
+#
+# HONESTY LIMITATION (see README / PUBLISHING.md): the threat_intel_lookup tool
+# reads the repo's sibling `threat_intel/` directory for its offline STIX->MITRE
+# path. A STANDALONE install (uvx/pipx, outside the repo) does not ship that
+# directory, so that ONE tool degrades honestly — with no bundle reachable it
+# returns "n/a (nothing to match against)", never a fabricated verdict. Every
+# other tool proxies the running local backend and is unaffected.
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "itsoc-mcp"
+version = "0.1.0"
+description = "Read-only MCP server exposing the itsoc log-analysis backend's existing analysis to MCP clients. Client of the local API; computes no verdicts; redacted-by-default egress."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Ankit Kumar" }]
+keywords = ["mcp", "model-context-protocol", "security", "soc", "log-analysis", "read-only"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Information Technology",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+]
+
+# The 1.x line ONLY: MCP clients speak the stable 1.x decorator API. mcp 2.0
+# changed the server API (no list_tools/call_tool decorators), so pin below it.
+dependencies = ["mcp>=1.0,<2"]
+
+[project.scripts]
+itsoc-mcp = "itsoc_mcp.server:main"
+
+[project.urls]
+Homepage = "https://github.com/Ankit512/log-anomaly-detector"
+Documentation = "https://github.com/Ankit512/log-anomaly-detector/blob/main/itsoc_mcp/README.md"
+
+# The package modules live directly in this directory (itsoc_mcp/), so map the
+# import package `itsoc_mcp` onto ".". Build from within itsoc_mcp/.
+[tool.setuptools]
+packages = ["itsoc_mcp"]
+
+[tool.setuptools.package-dir]
+itsoc_mcp = "."
+
+[tool.setuptools.package-data]
+itsoc_mcp = ["requirements-mcp.txt"]

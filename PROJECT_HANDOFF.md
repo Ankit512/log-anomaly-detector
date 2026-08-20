@@ -4,7 +4,7 @@
 > without losing context. Covers the goal, what's been built, the architecture, how to
 > run it, known issues, and what's next.
 
-_Last updated: 2026-08-19 · Repo: `~/Projects/log-analyzer` · GitHub: `Ankit512/log-anomaly-detector` (public, CI green)_
+_Last updated: 2026-08-20 · Repo: `~/Projects/log-analyzer` · GitHub: `Ankit512/log-anomaly-detector` (public, CI green)_
 
 ---
 
@@ -20,8 +20,10 @@ with a mandatory security principle: **API-first + certificate/token auth, no
 username/password integration, human approval before any write action.**
 
 We started at the bottom-left — **log analysis** — and have now completed **anomaly
-detection** with real-format support and a regression test harness. Everything else
-(live input, MCP enrichment, RCA, gated remediation) is Stage C, not yet started.
+detection** with real-format support and a regression test harness. On the **MCP** rung of
+that vision, a **read-only** MCP server (`itsoc_mcp/`) now exposes the local backend's existing
+analysis to MCP clients — it computes no verdicts and only relays them. The rest of Stage C
+(live input, RCA, and any MCP tool that *writes* / gated remediation) is not yet started.
 
 ### Hard requirements / decisions (unchanged)
 - **Open-source models only** (Llama / Mistral / Qwen); avoid Claude/Anthropic in the runtime.
@@ -41,7 +43,7 @@ MacBook Air M4, 16GB RAM. Target a 7B–8B model at Q4/Q5. Do not attempt 70B lo
 |-------|-------------|--------|
 | **A** | Log triage on a local open-source model | ✅ Done |
 | **B** | Anomaly detection (deterministic + LLM), real-format support, eval harness | ✅ Done & regression-guarded (17/17) |
-| **C** | Ops platform (live input, MCP tools, RCA, gated remediation) | 🟡 SOC subsystems (incidents/assets/cases/reports/intel/metrics) + threat-intel enrichment landed; live input, RCA, remediation not started |
+| **C** | Ops platform (live input, MCP tools, RCA, gated remediation) | 🟡 SOC subsystems (incidents/assets/cases/reports/intel/metrics) + threat-intel enrichment landed; a **read-only MCP server** (`itsoc_mcp/`) exposing the local backend to MCP clients has landed (computes no verdicts); live input, RCA, MCP *write* / gated remediation not started |
 | **UI-1** | Local vanilla-JS review console + `serve.py`, log-source picker, run history, standalone export | ✅ Built, live, CI-tested |
 | **UI-2** | **React SOC platform** (`web/`, "itsoc-web"): Overview, Alerts, Incidents, Threat Intel, Assets, Reports, Cases, Settings | ✅ Built, live, vitest-tested |
 
@@ -175,6 +177,7 @@ engine. By theme:
 | **React SOC platform (Phase A→C)** | `web/` foundation — Vite + React + TS + Tailwind + shadcn shell, Overview + Alerts (`feat/web-foundation`); v6 SOC Overview reskin wired to real data (`feat/overview-v6-reskin`); real upload progress + run/version history + analyst streaming + persistent notifications + light/dark theme (`feat/overview-*`); URL-or-file upload dialog (`feat/upload-link-ingest`); honest unrecognized-format banner (`feat/overview-unrecognized-honesty`). |
 | **Phase C pages** | Incidents, Threat Intel, Assets, Reports (`feat/phaseC-dwight`); Cases CRUD, Settings, honest Logout (`feat/phaseC-jim`). |
 | **Downloadable exports** | `/api/export?format=csv\|html\|xml\|json\|md` — real serializations of the run's findings, `Content-Disposition: attachment`, honest `409` when idle (`feat/report-export-formats`). |
+| **Read-only MCP server** | `itsoc_mcp/` — seven read-only tools (`analyze_log`, `list_runs`, `get_findings`, `get_evidence`, `explain_finding`, `export_run`, `threat_intel_lookup`) that a **client** of the local API (`http://127.0.0.1:8765`) exposes to MCP clients (Claude Code/Desktop) over stdio. It **computes no verdicts** — severity/correlation stay rule-owned; explanations are advisory; MITRE tags are derived. Raw log text is **redacted by default** through the existing `console/redact.py` egress choke point (raw only with `ITSOC_MCP_TRUSTED_LOCAL=1`); every response carries a provenance block with the detector sha256. Dependency-isolated (`requirements-mcp.txt` = the `mcp` SDK only; core `serve.py` still runs with zero installs); `test_mcp.py` is network-free (81 assertions) (`feat/itsoc-mcp`). |
 
 Every one of these is **additive**: the detector is untouched, `raw` stays the real line, and
 each subsystem shows real data or an honest empty/`n/a` state.
@@ -207,6 +210,8 @@ each subsystem shows real data or an honest empty/`n/a` state.
 | `samples/` | Real LogHub datasets: `Linux_2k.log`, `OpenSSH_2k.log`, `Android_2k.log`; plus `log360_export.csv` / `log360_syslog.log`. |
 | `sample-2.log` | 19-line synthetic baseline (canonical format, 3 planted issues). |
 | `threat_intel/` | Stage C (T9) prototype: `threat_detector.py` (match IOCs→MITRE ATT&CK), `taxii_client.py` (STIX/TAXII, import-guarded), `mitre_attack.py` (ATT&CK mapper), `export_iocs.py` (report.json→IOC list), `demo_threat_intel.json`, `test_threat_intel.py`, `requirements-taxii.txt` (live-mode deps only), `README.md`. Offline mode is stdlib-only. |
+| `itsoc_mcp/` | Read-only MCP server (Stage C, read-only): `server.py` (MCP stdio wiring + tool registry, `main()` entry point), `tools.py` (the seven read-only tool implementations), `client.py` (stdlib urllib proxy to the local API), `redaction.py` (egress guard delegating to `console/redact.py`), `threat_intel_offline.py` (offline STIX→MITRE path reusing `threat_intel/`), `__main__.py` (`python -m itsoc_mcp`), `requirements-mcp.txt` (the `mcp` SDK only), `pyproject.toml` (packaging + `itsoc-mcp` console script), `test_mcp.py` (network-free, 81 assertions), `README.md` / `PUBLISHING.md`. Client of the backend; computes no verdicts. |
+| `LICENSE` | MIT license (top level). |
 | `.env.example`, `.gitignore`, `README.md` | Setup. Copy `.env.example` → `.env`; local Ollama needs no real key. |
 
 ### How to run
@@ -319,6 +324,13 @@ cd web && npm test                        # React dashboard (vitest, jsdom)
   severity decision; optional LLM explanation second pass.
 
 **Stage C (only once there's a real environment / need)**
+- **MCP enrichment — DONE (read-only).** A read-only MCP server (`itsoc_mcp/`) exposes the
+  local backend's existing analysis to MCP clients over stdio: `analyze_log`, `list_runs`,
+  `get_findings`, `get_evidence`, `explain_finding`, `export_run`, `threat_intel_lookup`. It is a
+  *client* of the API and computes no verdicts; raw log text is redacted by default via
+  `console/redact.py`; every response carries a provenance block with the detector sha256.
+  **Remaining:** any MCP tool that *writes* (analyst actions) and gated remediation stay out of
+  scope until the security-gateway path exists (see T11).
 - **T7 Live input** — tailed file / stream / SIEM API pull for continuous operation.
 - **T8 Analyst feedback loop** — capture true/false-positive marks; refine rules + few-shot.
 - **T9 Read-only enrichment** — threat-intel matching + MITRE ATT&CK prototype is IN

@@ -26,3 +26,6 @@ graphify-out/
 itsoc_mcp/__pycache__/
 itsoc_mcp/_tmp_sample.log
 itsoc_mcp/_tmp_ti/
+itsoc_mcp/dist/
+itsoc_mcp/build/
+itsoc_mcp/*.egg-info/
