@@ -10,4 +10,4 @@
 # This package is the sole dependency; the MCP server talks to the local backend
 # over plain urllib (stdlib) and imports console/redact.py for egress masking.
 
-mcp>=1.0.0
+mcp>=1.0,<2   # 1.x line: the stable decorator API MCP clients use (2.0 changed it)

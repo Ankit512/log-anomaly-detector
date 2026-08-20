@@ -26,7 +26,9 @@ false all-clear.
 
 Runs on **macOS, Linux and Windows**. Python standard library only — no `pip install`, and
 **no Node needed to run**: the React dashboard ships as a pre-built bundle that `serve.py`
-serves at `:8765`. (Node is only needed if you want to *modify* the frontend.)
+serves at `:8765`. (Node is only needed if you want to *modify* the frontend. The `mcp` SDK is
+only for the optional read-only MCP server in [§6](#6-mcp-server-optional) — the core needs no
+`pip install`.)
 
 ---
 
@@ -186,7 +188,33 @@ endpoint returns an honest `409`, never an empty file.
 
 ---
 
-## 6. Command line
+## 6. MCP server (optional)
+
+`itsoc_mcp/` is a **read-only** [MCP](https://modelcontextprotocol.io) server that exposes this
+project's existing analysis to an MCP-capable agent (Claude Code / Desktop). It is honest and
+local by design: it is a **client** of the running backend (`http://127.0.0.1:8765`) and
+**computes no verdicts** — severity and correlation stay rule-owned by the frozen detector,
+explanations are advisory, MITRE tags are derived. Raw log text is **redacted by default**
+through the same `console/redact.py` choke point the rest of the project uses (raw only with
+`ITSOC_MCP_TRUSTED_LOCAL=1`), and every response carries a provenance block with the detector
+sha256. The seven tools are `analyze_log`, `list_runs`, `get_findings`, `get_evidence`,
+`explain_finding`, `export_run`, and `threat_intel_lookup`.
+
+The `mcp` SDK is the **only** extra dependency and it is for this optional server alone — the
+core still runs with no `pip install`:
+
+```bash
+pip install -r itsoc_mcp/requirements-mcp.txt   # the mcp SDK only
+python3 console/serve.py                         # the backend must be running
+python -m itsoc_mcp                              # speak MCP over stdio (from the repo root)
+```
+
+See [`itsoc_mcp/README.md`](itsoc_mcp/README.md) for the full tool reference, the environment
+variables, and a ready-to-paste MCP client registration JSON.
+
+---
+
+## 7. Command line
 
 ```bash
 # Full analysis: rules + LLM explanations
@@ -212,7 +240,7 @@ appear in ~8 seconds and explanations fill in behind a progress bar.
 
 ---
 
-## 7. Threat-intel enrichment (optional)
+## 8. Threat-intel enrichment (optional)
 
 An opt-in downstream step in [`threat_intel/`](threat_intel/) matches flagged IPs against
 threat-intel indicators and resolves each to a MITRE ATT&CK technique (a blocked outbound to
@@ -225,7 +253,7 @@ transmitted; only redacted finding-lines go out. Local mode remains the default 
 
 ---
 
-## 8. Design constraints
+## 9. Design constraints
 
 Data stays local · no model training · read-only, no automated actions · **rules are
 authoritative on severity; the LLM only explains** · the validated detector
@@ -234,7 +262,7 @@ formats added as sibling modules · `raw` is always the real log line, never a r
 never claims more than it can prove (integrity hashes, not signatures; "compare not run", not a
 fake zero; "format not recognized", not a false all-clear; *n/a*, not a guessed metric).
 
-## 9. Project layout
+## 10. Project layout
 
 Full inventory in §5 of [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md). Key pieces:
 
@@ -252,3 +280,9 @@ Full inventory in §5 of [`PROJECT_HANDOFF.md`](PROJECT_HANDOFF.md). Key pieces:
 - **Enrichment / tests / data** — `threat_intel/` (offline STIX → MITRE), `tests/eval/`
   (labeled corpus + harness), `console/test_console.py` (backend), `web/src/test/` (dashboard),
   `samples/` (real LogHub logs + Log360/Android samples).
+
+---
+
+## License
+
+MIT — see [`LICENSE`](LICENSE).
