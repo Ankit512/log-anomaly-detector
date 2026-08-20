@@ -1,0 +1,22 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.Ankit512/itsoc-mcp",
+  "description": "Read-only MCP server over a local log-analysis backend; a client that computes no verdicts.",
+  "version": "0.1.0",
+  "repository": {
+    "url": "https://github.com/Ankit512/log-anomaly-detector",
+    "source": "github",
+    "subfolder": "itsoc_mcp"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "itsoc-mcp",
+      "version": "0.1.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}

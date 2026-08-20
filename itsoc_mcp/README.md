@@ -1,5 +1,9 @@
 # itsoc_mcp — a read-only MCP server over the local analysis backend
 
+<!-- The line below is the MCP Registry PyPI ownership marker (must ship in the
+     PyPI long-description). Keep it identical to `name` in itsoc_mcp/server.json. -->
+mcp-name: io.github.Ankit512/itsoc-mcp
+
 `itsoc_mcp` exposes this project's **existing** log-analysis capabilities as
 [Model Context Protocol](https://modelcontextprotocol.io) tools, so an
 MCP-capable agent (Claude Code / Claude Desktop) can drive them. It is an
