@@ -1,0 +1,8 @@
+timestamp,level,host,message
+2026-08-20T10:00:00,INFO,db-02,service started
+2026-08-20T10:00:05,ERROR,db-02,connection pool exhausted
+2026-08-20T10:00:11,ERROR,db-02,connection pool exhausted
+2026-08-20T10:00:18,ERROR,db-02,query timeout after 30s
+2026-08-20T10:00:24,ERROR,db-02,replica lag exceeded threshold
+2026-08-20T10:00:31,ERROR,db-02,failover initiated
+2026-08-20T10:02:00,INFO,db-02,failover complete

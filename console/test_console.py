@@ -3169,6 +3169,84 @@ def check_evtx():
     return 0 if all(results) else 1
 
 
+def check_formats_universal():
+    """Broadened multi-format ingestion (formats_universal.py) + the honest/force
+    unrecognized switch, reconciled with the frozen detector.
+
+    Checks: JSON + CSV structured inputs parse to detector-schema records and
+    detect() runs on them WITHOUT crashing, with severity taken from the source
+    (not guessed); the frozen detector's brute-force / error-burst rules fire on
+    the source-reported data; a GENUINELY-unrecognized file stays honest in
+    'honest' mode (0 parsed) and is force-parsed as text in 'force' mode — neither
+    crashes detect(); an empty file stays empty-honest in both modes; and the
+    frozen detector sha is unchanged.
+    """
+    import hashlib
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    import formats_universal as fu
+    from anomaly_detector import detect
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nBroadened multi-format ingestion (formats_universal.py) + honest/force switch:")
+
+    sha = hashlib.sha256((ROOT / "anomaly_detector.py").read_bytes()).hexdigest()
+    check("frozen anomaly_detector.py sha256 unchanged",
+          sha == "43f0560f2a81d52a9b8909d4c0f3a537ef2059b343ea48acc7dba59b38312d05", sha)
+
+    FIX = ROOT / "tests" / "eval" / "fixtures"
+
+    # --- JSON: structured parse -> detector runs, source-reported severity ------
+    jrecs, jstats = fu.load_log_file(FIX / "sample_events.json")
+    check("JSON recognized and parsed (7 events)", jstats["format"] == "json" and jstats["parsed"] == 7,
+          str((jstats["format"], jstats["parsed"])))
+    check("JSON records carry the detector contract keys {n,ts,level,host,msg,raw}",
+          all(all(k in r for k in ("n", "ts", "level", "host", "msg", "raw")) for r in jrecs))
+    check("JSON severity is source-reported (WARNING -> WARN), not guessed",
+          all(r["level"] == "WARN" for r in jrecs if "auth failed" in r["msg"]))
+    janoms = detect(jrecs)   # must not raise
+    check("detect() runs on JSON records and fires brute-force (source data)",
+          any(a["type"] == "auth_bruteforce" for a in janoms), str([a["type"] for a in janoms]))
+
+    # --- CSV: source-reported ERROR level drives the error-burst rule ----------
+    crecs, cstats = fu.load_log_file(FIX / "sample_events.csv")
+    check("CSV recognized and parsed (7 rows)", cstats["format"] == "csv" and cstats["parsed"] == 7,
+          str((cstats["format"], cstats["parsed"])))
+    check("CSV severity is source-reported (ERROR carried from the 'level' column)",
+          sum(1 for r in crecs if r["level"] == "ERROR") == 5,
+          str([r["level"] for r in crecs]))
+    canoms = detect(crecs)   # must not raise
+    check("detect() runs on CSV records and fires error-burst on source ERROR level",
+          any(a["type"] == "error_rate_spike" for a in canoms), str([a["type"] for a in canoms]))
+
+    # --- Unrecognized text: honest vs force, neither crashes -------------------
+    UNREC = ROOT / "tests" / "eval" / "cases" / "neg_unrecognized_format.log"
+    hrecs, hstats = fu.load_log_file(UNREC, mode="honest")
+    check("unrecognized + honest -> 0 parsed (stays honest-unrecognized)",
+          hstats["parsed"] == 0 and hstats["format"] == "unknown", str((hstats["format"], hstats["parsed"])))
+    check("unrecognized + honest -> detect() gets no synthetic records, no crash",
+          detect(hrecs) == [])
+    frecs, fstats = fu.load_log_file(UNREC, mode="force")
+    check("unrecognized + force -> parses all 11 lines as generic text",
+          fstats["parsed"] == 11, str((fstats["format"], fstats["parsed"])))
+    check("unrecognized + force -> detect() runs on adapted records without crashing",
+          isinstance(detect(frecs), list))
+
+    # --- Empty stays empty-honest in BOTH modes -------------------------------
+    EMPTY = ROOT / "tests" / "eval" / "cases" / "neg_empty.log"
+    for m in ("honest", "force"):
+        erecs, estats = fu.load_log_file(EMPTY, mode=m)
+        check(f"empty + {m} -> 0 parsed, format 'empty' (honest empty report)",
+              estats["parsed"] == 0 and estats["format"] == "empty" and detect(erecs) == [])
+
+    return 0 if all(results) else 1
+
+
 def check_validate_real():
     """Real-log validation harness (tests/eval/validate_real.py).
 
@@ -3285,14 +3363,15 @@ def main():
     ti_oem_ = check_ti_oem()
     evtx_ = check_evtx()
     validate_ = check_validate_real()
+    formats_ = check_formats_universal()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
             or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_ or discovery_ or ti_oem_ or evtx_ or validate_):
+            or syslog_ or discovery_ or ti_oem_ or evtx_ or validate_ or formats_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog + discovery + ti-oem + evtx + validate-real checks green")
+          "+ syslog + discovery + ti-oem + evtx + validate-real + formats-universal checks green")
     return 0
 
 
