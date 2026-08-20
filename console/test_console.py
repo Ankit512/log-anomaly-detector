@@ -3126,10 +3126,15 @@ def check_evtx():
             # to feed a real event XML — the multipart->ingest->store path is real.)
             real_ingest = ev.ingest_evtx_file
             ev.ingest_evtx_file = lambda path: ev.ingest_event_xmls([SAMPLE])
+            # Force the availability gate open so this exercises the available-path
+            # wiring even where python-evtx is not installed (e.g. CI). The parser
+            # itself is stubbed above, so no real python-evtx dependency is needed.
+            ev.evtx_available = lambda: True
             try:
                 s_ok, ok = post_evtx("Security.evtx", b"\x00\x01binary")
             finally:
                 ev.ingest_evtx_file = real_ingest
+                ev.evtx_available = real_avail
             check("POST /api/evtx/ingest returns a real stored/parsed count",
                   s_ok == 200 and ok.get("parsed") == 1, str(ok))
 
