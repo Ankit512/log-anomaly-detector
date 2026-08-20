@@ -28,6 +28,7 @@ Stdlib only. (cgi is gone in 3.13, so multipart is parsed with email.parser.)
 """
 
 import argparse
+import collections
 import http.server
 import ipaddress
 import json
@@ -64,6 +65,9 @@ import ti_oem  # noqa: E402  # TI enrichment (OTX/AbuseIPDB) + OEM polling (socf
 import evtx_ingest  # noqa: E402  # Windows .evtx ingest -> store (socf-evtx-history)
 sys.path.insert(0, str(ROOT))
 import log_analyzer as la  # noqa: E402
+import normalize  # noqa: E402  # envelope parser — streamed lines use the SAME one
+import rule_context  # noqa: E402
+import rules_syslog  # noqa: E402
 sys.path.insert(0, str(ROOT / "threat_intel"))
 from tactic_phase_map import phase_for_tactics  # noqa: E402
 
@@ -650,6 +654,189 @@ def resolve_sample(value):
     return ROOT / value
 
 
+# ---------------------------------------------------------------------------
+# Live stream (Phase D): GET /api/stream — contract in docs/soc_subsystems.md.
+# Tails the RAW input log and pushes SSE events. Every streamed line goes
+# through the SAME pipeline as a batch run — normalize for the envelope, then
+# the frozen detector's rules over a sliding window — so there is no realtime
+# parser to drift, and severity still comes only from the rules.
+# ---------------------------------------------------------------------------
+
+STREAM_POLL_SEC = 0.5        # file poll cadence (contract: seek to EOF, ~0.5s)
+STREAM_PING_SEC = 15         # heartbeat keeps proxies from killing the stream
+STREAM_QUEUE_LIMIT = 500     # per-client bounded queue (contract: ~500 events)
+STREAM_WINDOW_RECORDS = 500  # sliding window of recent records for the rules
+
+
+class StreamQueue:
+    """Per-client bounded buffer between the tailer and the SSE writer.
+
+    On overflow the OLDEST event is dropped and the drop is COUNTED — the
+    writer turns that count into an `event: gap` frame before the next event.
+    A silent drop would fake a quiet log, which this repo forbids.
+    """
+
+    def __init__(self, limit=None):
+        self.limit = limit or STREAM_QUEUE_LIMIT
+        self._items = collections.deque()
+        self._lock = threading.Lock()
+        self._ready = threading.Event()
+        self._dropped = 0
+
+    def put(self, kind, data, event_id=None):
+        with self._lock:
+            if len(self._items) >= self.limit:
+                self._items.popleft()
+                self._dropped += 1
+            self._items.append((kind, data, event_id))
+            self._ready.set()
+
+    def get(self, timeout):
+        """Return (dropped_since_last_get, item_or_None)."""
+        if not self._ready.wait(timeout):
+            return 0, None
+        with self._lock:
+            item = self._items.popleft() if self._items else None
+            if not self._items:
+                self._ready.clear()
+            dropped, self._dropped = self._dropped, 0
+            return dropped, item
+
+
+def stream_frames(dropped, item):
+    """Frames owed for one queue read: the honest gap FIRST, then the event."""
+    frames = []
+    if dropped:
+        frames.append(("gap", {"dropped": dropped}, None))
+    if item:
+        frames.append(item)
+    return frames
+
+
+def resolve_stream_source(value):
+    """Whitelist for /api/stream: bundled samples plus the currently loaded
+    run's log (exact-match on the path this server itself resolved earlier).
+    Same security boundary as /api/analyze — a browser string is never
+    joined onto a path."""
+    try:
+        return resolve_sample(value)
+    except ValueError:
+        pass
+    current = STATE.get("logPath")
+    if current and value == current and Path(current).exists():
+        return Path(current)
+    raise ValueError(f"not a streamable source: {value!r}")
+
+
+def stream_detect(records, fmt):
+    """The batch rule sequence from log_analyzer.run(), over a window.
+
+    Same functions in the same order — canonicalize/detect_extra/dedupe for
+    rfc3164, then the FROZEN detector plus its deterministic enrichments —
+    so a streamed finding is decided exactly like a batch one.
+    """
+    extra = []
+    if fmt == "rfc3164":
+        records, _counts = rules_syslog.canonicalize(records)
+        extra = rules_syslog.detect_extra(records)
+        records, _dropped = rules_syslog.dedupe_auth_attempts(records)
+    raw = la.detect(records) + extra
+    raw = la.enrich_username_spray(raw, records)
+    raw = rule_context.enrich(raw, records)
+    return la.dedupe_anomalies(raw)
+
+
+def stream_adapt_findings(source_path, stats, anomalies):
+    """Adapt detector anomalies through the SAME adapter the batch path uses,
+    so a streamed `event: finding` carries the exact shape the console and
+    the React app already render."""
+    report = {
+        "source_file": str(source_path),
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime()),
+        "lines_parsed": stats.get("parsed", 0),
+        "lines_unparsed": stats.get("unparsed", 0),
+        "findings": la.detector_to_findings(anomalies),
+    }
+    return adapter.adapt(report)["findings"]
+
+
+def _anomaly_key(a):
+    """Identity of an anomaly for per-client dedupe. Evidence is part of the
+    key on purpose: when a burst grows, the rule's evidence changes and the
+    UPDATED finding is emitted again rather than suppressed."""
+    return (a.get("type"), a.get("summary"), a.get("evidence"))
+
+
+def tail_stream(path, queue, stop, start_after):
+    """Producer: poll the raw log, push envelope + finding events.
+
+    Line numbers are absolute file line numbers, so `id:` survives
+    reconnects (Last-Event-ID). Appended lines the parser does NOT accept
+    are still surfaced (bucket UNKNOWN, verbatim raw) — never silently
+    dropped. Re-parsing the whole file through normalize.load() on growth is
+    what guarantees a streamed record is bit-for-bit what a batch run would
+    have produced (same sniff, same year inference, same envelope).
+    """
+    last_n = start_after
+    last_size = None
+    emitted = set()          # anomaly keys already sent to THIS client
+    seq = 0                  # stream-unique finding ids
+    while not stop.is_set():
+        try:
+            size = path.stat().st_size
+        except OSError:
+            stop.wait(STREAM_POLL_SEC)
+            continue
+        if size == last_size:
+            stop.wait(STREAM_POLL_SEC)
+            continue
+        if last_size is not None and size < last_size:
+            last_n = 0       # truncation/rotation: the rewritten file is new lines
+        last_size = size
+
+        lines = path.read_text(errors="replace").splitlines()
+        records, stats = normalize.load(path)
+        by_n = {r["n"]: r for r in records}
+        appended = False
+        for n in range(last_n + 1, len(lines) + 1):
+            r = by_n.get(n)
+            if r:
+                appended = True
+                queue.put("log", {
+                    "n": n,
+                    "ts": r["ts"].isoformat() if r.get("ts") else "",
+                    "level": r.get("level") or "",
+                    "host": r.get("host") or "",
+                    "msg": r.get("msg") or "",
+                    "raw": r["raw"],   # verbatim source line — never fabricated
+                    # DISPLAY grouping via the adapter's own map — not a verdict.
+                    "bucket": adapter.LEVEL_BUCKET.get(
+                        str(r.get("level") or "").upper(), "UNKNOWN"),
+                }, event_id=n)
+            elif lines[n - 1].strip():
+                # The parser refused this line. Surfacing it as UNKNOWN keeps
+                # the stream honest — hiding it would fake a quiet log.
+                appended = True
+                queue.put("log", {"n": n, "ts": "", "level": "", "host": "",
+                                  "msg": "", "raw": lines[n - 1],
+                                  "bucket": "UNKNOWN"}, event_id=n)
+        last_n = max(last_n, len(lines))
+
+        if appended:
+            window = records[-STREAM_WINDOW_RECORDS:]
+            try:
+                fresh = [a for a in stream_detect(window, stats["format"])
+                         if _anomaly_key(a) not in emitted]
+                for adapted, anom in zip(
+                        stream_adapt_findings(path, stats, fresh), fresh):
+                    adapted["id"] = f"stream-{seq}"
+                    seq += 1
+                    queue.put("finding", adapted, event_id=last_n)
+                    emitted.add(_anomaly_key(anom))
+            except Exception as e:   # a rules crash must not kill the tail
+                print(f"  stream rules error: {e}", flush=True)
+
+
 def validate_public_url(url):
     """Reject anything that is not a plain PUBLIC http(s) URL, so a pasted link
     cannot be turned into a server-side request against the loopback interface,
@@ -994,6 +1181,8 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             self._json(runs_summary())
         elif path == "/api/compute":
             self._json(masked_compute())
+        elif path == "/api/stream":
+            self._api_stream()
         # --- SOC subsystems (console/soc.py; contract in docs/soc_subsystems.md)
         elif path == "/api/incidents":
             qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
@@ -1495,6 +1684,63 @@ class ConsoleHandler(http.server.BaseHTTPRequestHandler):
             return self._json({"error": f"the analyst model is not reachable: {e}"}, 502)
         print(f"  analyst asked: {question[:60]!r}", flush=True)
         return self._json({"answer": answer})
+
+    def _api_stream(self):
+        """GET /api/stream?source=… — live SSE tail (Phase D contract in
+        docs/soc_subsystems.md). Named events: log / finding / ping / gap.
+        Data frames carry `id: <line-number>`, so a reconnect with
+        Last-Event-ID resumes AFTER that line instead of replaying the file.
+        Runs on its own thread (ThreadingHTTPServer), like _ask_stream."""
+        qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        value = (qs.get("source") or [""])[0]
+        try:
+            path = resolve_stream_source(value)
+        except ValueError as e:
+            return self._json({"error": str(e)}, 400)
+
+        last_id = (self.headers.get("Last-Event-ID") or "").strip()
+        if last_id.isdigit():
+            start_after = int(last_id)      # resume after this line — no replay
+        else:
+            try:                            # fresh client: start at EOF
+                with open(path, errors="replace") as f:
+                    start_after = sum(1 for _ in f)
+            except OSError:
+                return self._json({"error": f"cannot read {path.name}"}, 500)
+
+        print(f"  stream: {value!r} from line {start_after}", flush=True)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        self.end_headers()
+
+        queue, stop = StreamQueue(), threading.Event()
+        threading.Thread(target=tail_stream, args=(path, queue, stop, start_after),
+                         daemon=True).start()
+        last_write = time.monotonic()
+
+        def send(kind, data, event_id=None):
+            nonlocal last_write
+            frame = f"event: {kind}\n"
+            if event_id is not None:
+                frame += f"id: {event_id}\n"
+            frame += f"data: {json.dumps(data)}\n\n"
+            self.wfile.write(frame.encode())
+            self.wfile.flush()
+            last_write = time.monotonic()
+
+        try:
+            while True:
+                dropped, item = queue.get(timeout=STREAM_POLL_SEC)
+                for kind, data, event_id in stream_frames(dropped, item):
+                    send(kind, data, event_id)
+                if time.monotonic() - last_write >= STREAM_PING_SEC:
+                    send("ping", {})
+        except (BrokenPipeError, ConnectionResetError):
+            pass                            # client closed — the tail stops too
+        finally:
+            stop.set()
 
     def _ask_stream(self, question):
         """Stream the analyst reply as Server-Sent Events: one `{"delta": ...}`

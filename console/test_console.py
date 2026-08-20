@@ -2178,6 +2178,165 @@ def check_soc_subsystems():
     return 0 if all(results) else 1
 
 
+def check_stream():
+    """Phase D live tail (GET /api/stream, docs/soc_subsystems.md): the source
+    whitelist holds, a tailed line arrives as `event: log` with the real
+    envelope, a rule-firing window emits `event: finding` with detector-owned
+    severity, queue overflow surfaces an `event: gap` (never a silent drop),
+    and Last-Event-ID resume skips already-sent lines."""
+    ROOT = HERE.parent
+    sys.path.insert(0, str(ROOT))
+    sys.path.insert(0, str(HERE))
+    import http.client
+    import http.server
+    import threading
+    import time
+    import urllib.parse
+    import serve
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}"
+              + ("" if cond or not detail else f" — {detail}"))
+
+    def read_frames(resp, want, timeout=20):
+        """Collect SSE frames until `want` non-ping frames arrived."""
+        frames, cur = [], {}
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            line = resp.fp.readline()
+            if not line:
+                break
+            line = line.decode().rstrip("\n")
+            if not line:
+                if cur:
+                    frames.append(cur)
+                    cur = {}
+                if len([f for f in frames if f.get("event") != "ping"]) >= want:
+                    break
+                continue
+            key, _, val = line.partition(": ")
+            cur[key] = val
+        return frames
+
+    def open_stream(port, source, last_event_id=None):
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=25)
+        headers = {"Last-Event-ID": last_event_id} if last_event_id else {}
+        conn.request("GET", "/api/stream?source="
+                     + urllib.parse.quote(source, safe=""), headers=headers)
+        return conn, conn.getresponse()
+
+    print("\nLive stream — whitelist, tail envelope, rule finding, gap, resume:")
+
+    real_state = serve.STATE
+    try:
+        with tempfile.TemporaryDirectory(prefix="stream-test-") as tmp:
+            log = Path(tmp) / "live.log"
+            log.write_text("2026-08-13T02:16:40Z INFO host-1 service started\n")
+            serve.STATE = {"idle": False, "logPath": str(log)}
+
+            srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0),
+                                                  serve.ConsoleHandler)
+            port = srv.server_address[1]
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+            try:
+                # --- whitelist: same boundary as /api/analyze ---------------
+                conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+                conn.request("GET", "/api/stream?source=/etc/passwd")
+                r = conn.getresponse()
+                body = json.loads(r.read() or b"{}")
+                check("arbitrary path is refused with an honest 400",
+                      r.status == 400 and "not a streamable" in body.get("error", ""),
+                      f"status={r.status} body={body}")
+                conn.close()
+                check("bundled sample values stay accepted",
+                      serve.resolve_stream_source("sample-2.log").name == "sample-2.log")
+
+                # --- tail: appended lines arrive with the real envelope -----
+                conn, resp = open_stream(port, str(log))
+                check("stream is text/event-stream + no-store",
+                      resp.status == 200
+                      and resp.getheader("Content-Type", "").startswith("text/event-stream")
+                      and "no-store" in resp.getheader("Cache-Control", ""))
+
+                with log.open("a") as f:
+                    f.write("2026-08-13T02:16:44Z ERROR host-1 something failed badly\n")
+                    for i in range(6):
+                        f.write(f"2026-08-13T02:16:{45 + i}Z WARN host-1 "
+                                "auth failed for user 'admin' from 203.0.113.44\n")
+
+                frames = read_frames(resp, want=8)
+                conn.close()
+                logs = [f for f in frames if f.get("event") == "log"]
+                data = [json.loads(f["data"]) for f in logs]
+                check("connect seeks to EOF — the pre-existing line is not replayed",
+                      data and data[0]["n"] == 2, str([d.get("n") for d in data]))
+                first = data[0] if data else {}
+                check("event: log carries the parsed envelope + verbatim raw",
+                      first.get("level") == "ERROR" and first.get("host") == "host-1"
+                      and first.get("msg") == "something failed badly"
+                      and first.get("raw") == "2026-08-13T02:16:44Z ERROR host-1 "
+                                              "something failed badly"
+                      and first.get("ts", "").startswith("2026-08-13T02:16:44"),
+                      str(first))
+                check("bucket is the adapter's display grouping (ERROR→HIGH, WARN→MEDIUM)",
+                      first.get("bucket") == "HIGH"
+                      and all(d["bucket"] == "MEDIUM" for d in data[1:]))
+                check("each log frame carries id: <line-number>",
+                      all(f.get("id") == str(json.loads(f["data"])["n"]) for f in logs))
+
+                # --- finding: the frozen detector fired on the window -------
+                finds = [json.loads(f["data"]) for f in frames
+                         if f.get("event") == "finding"]
+                bf = next((f for f in finds if f.get("type") == "auth_bruteforce"), None)
+                check("6 auth failures emit event: finding via the frozen detector",
+                      bf is not None, f"finding events: {[f.get('type') for f in finds]}")
+                check("severity is rule-owned (HIGH, RULE-CAUGHT, ruleSev set)",
+                      bool(bf) and bf["sev"] == "HIGH" and bf["prov"] == "RULE-CAUGHT"
+                      and bf["ruleSev"] == "HIGH", str(bf and {
+                          "sev": bf["sev"], "prov": bf["prov"], "ruleSev": bf["ruleSev"]}))
+                check("finding is the adapted shape with a stream-unique id",
+                      bool(bf) and bf["id"].startswith("stream-")
+                      and "title" in bf and "lines" in bf and "timeline" in bf)
+
+                # --- gap: overflow is surfaced, never silent ----------------
+                q = serve.StreamQueue(limit=3)
+                for i in range(10):
+                    q.put("log", {"n": i + 1}, event_id=i + 1)
+                dropped, item = q.get(timeout=1)
+                framed = serve.stream_frames(dropped, item)
+                check("overflow drops OLDEST and counts every drop",
+                      dropped == 7 and item[1]["n"] == 8,
+                      f"dropped={dropped} item={item}")
+                check("the drop becomes an event: gap frame BEFORE the next event",
+                      framed[0][0] == "gap" and framed[0][1] == {"dropped": 7}
+                      and framed[1][0] == "log", str(framed))
+                check("an empty queue reports nothing dropped",
+                      serve.StreamQueue(limit=3).get(timeout=0.05) == (0, None))
+
+                # --- resume: Last-Event-ID skips already-sent lines ---------
+                conn, resp = open_stream(port, str(log), last_event_id="5")
+                frames = read_frames(resp, want=3)
+                conn.close()
+                resumed = [json.loads(f["data"]) for f in frames
+                           if f.get("event") == "log"]
+                check("reconnect with Last-Event-ID: 5 resumes at line 6 — no replay",
+                      [d["n"] for d in resumed][:3] == [6, 7, 8],
+                      str([d.get("n") for d in resumed]))
+            finally:
+                srv.shutdown()
+    finally:
+        serve.STATE = real_state
+
+    if not all(results):
+        print(f"  stream: {results.count(False)} check(s) failed")
+        return 1
+    return 0
+
+
 def check_export():
     """Downloadable run exports — GET /api/export?format=csv|xml|json|html|md.
 
@@ -3355,6 +3514,7 @@ def main():
     allruns = check_allruns()
     soc = check_soc_overview()
     subsystems = check_soc_subsystems()
+    stream_ = check_stream()
     export_ = check_export()
     react = check_serve_react()
     store_ = check_store()
@@ -3365,13 +3525,15 @@ def main():
     validate_ = check_validate_real()
     formats_ = check_formats_universal()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
-            or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_ or discovery_ or ti_oem_ or evtx_ or validate_ or formats_):
+            or layout or allruns or soc or subsystems or stream_ or export_ or react
+            or store_ or syslog_ or discovery_ or ti_oem_ or evtx_ or validate_
+            or formats_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
-          "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog + discovery + ti-oem + evtx + validate-real + formats-universal checks green")
+          "+ layout + all-runs + soc-overview + soc-subsystems + stream + export + serve-react "
+          "+ store + syslog + discovery + ti-oem + evtx + validate-real + formats-universal "
+          "checks green")
     return 0
 
 
