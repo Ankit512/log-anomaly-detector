@@ -1,0 +1,13 @@
+# MCP SERVER MODE ONLY — not needed for normal use.
+#
+# The core backend (`python3 console/serve.py`) and everything it serves are
+# Python-stdlib only and must stay installable with ZERO extra packages. Install
+# this ONLY if you want to expose the backend's read-only analysis tools to an
+# MCP-capable agent (Claude Code / Desktop) via `python -m itsoc_mcp`.
+#
+#   pip install -r itsoc_mcp/requirements-mcp.txt
+#
+# This package is the sole dependency; the MCP server talks to the local backend
+# over plain urllib (stdlib) and imports console/redact.py for egress masking.
+
+mcp>=1.0.0
