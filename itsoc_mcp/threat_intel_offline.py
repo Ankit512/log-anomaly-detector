@@ -12,6 +12,11 @@ from ITSOC_STIX_BUNDLE) and the locally-cached ATT&CK database. Nothing leaves
 the machine. If no bundle is configured, the honest answer is "n/a — nothing to
 match against", never a fabricated verdict; if the ATT&CK cache is absent, IOC
 matches are still reported but technique names are marked unavailable.
+
+STANDALONE INSTALL: this path reuses the repo's sibling threat_intel/ package. In
+a bare `uvx itsoc-mcp` install that directory is not shipped, so the whole path is
+unavailable. That is surfaced as ThreatIntelUnavailable and the tool FAILS CLOSED
+with an honest message — never a fabricated match or a fake all-clear.
 """
 
 import os
@@ -25,6 +30,36 @@ _IPV4_RE = re.compile(r"^(?:\d{1,3}\.){3}\d{1,3}$")
 # The threat_intel package is a set of sibling scripts that import each other by
 # bare name (`import mitre_attack`), so its own directory must be on sys.path.
 _THREAT_DIR = Path(__file__).resolve().parent.parent / "threat_intel"
+
+UNAVAILABLE_MSG = (
+    "offline threat-intel is unavailable in this install: the repo's threat_intel/ "
+    "package is not on the path (expected in a standalone `uvx itsoc-mcp` install). "
+    "This is NOT a clean verdict and NOT an all-clear on the IP — run the MCP server "
+    "from the repo (python -m itsoc_mcp) to use offline threat-intel."
+)
+
+
+class ThreatIntelUnavailable(Exception):
+    """Raised when the sibling threat_intel/ package is not importable (standalone
+    install). Callers translate this into an honest fail-closed tool response."""
+
+
+def threat_intel_available():
+    """True only when the sibling threat_intel/ modules can actually be imported."""
+    if not _THREAT_DIR.is_dir():
+        return False
+    _ensure_path()
+    try:
+        import threat_detector  # noqa: F401
+        import taxii_client     # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _require_available():
+    if not threat_intel_available():
+        raise ThreatIntelUnavailable(UNAVAILABLE_MSG)
 
 
 def _ensure_path():
@@ -55,6 +90,7 @@ def bundle_path(override=None):
 def build_mapper():
     """Return (mapper, note). `mapper` resolves technique ids; when the ATT&CK
     cache is missing it is a _NullMapper and `note` explains the degradation."""
+    _require_available()
     _ensure_path()
     try:
         import mitre_attack
@@ -71,6 +107,7 @@ def build_mapper():
 def load_objects(path):
     """Load STIX objects from a local bundle. Raises FileNotFoundError/ValueError
     honestly; callers translate that into an honest tool error."""
+    _require_available()
     _ensure_path()
     import threat_detector
     return threat_detector.load_stix_objects_offline(path)
@@ -80,6 +117,7 @@ def match_ip(ip, objects, mapper):
     """Deterministic match of one IP against the bundle's indicators, enriched
     with ATT&CK context. Pure reuse of the existing offline functions. Returns a
     list of match dicts (possibly empty — an honest 'no match')."""
+    _require_available()
     _ensure_path()
     import taxii_client
     import threat_detector

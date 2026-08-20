@@ -31,6 +31,7 @@ FROZEN_SHA = "43f0560f2a81d52a9b8909d4c0f3a537ef2059b343ea48acc7dba59b38312d05"
 
 _PASS = 0
 _FAIL = 0
+_SKIP = 0
 
 
 def check(name, cond):
@@ -41,6 +42,12 @@ def check(name, cond):
     else:
         _FAIL += 1
         print(f"  \033[31mFAIL\033[0m {name}")
+
+
+def skip(name, reason):
+    global _SKIP
+    _SKIP += 1
+    print(f"  \033[33mskip\033[0m {name} — {reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +448,94 @@ def test_ti_no_match(tmpdir, monkeypatch_build_mapper):
           and "not an all-clear" in r.get("note", "").lower())
 
 
+# ===========================================================================
+# Standalone redaction — vendored mirror, drift-guard, active source
+# ===========================================================================
+# A corpus exercising every masking position: IPv4/IPv6, all username patterns,
+# known hosts/users, control chars, and an over-long line.
+_REDACT_CORPUS = [
+    "Failed password for admin from 10.0.0.9 port 22",
+    "Accepted publickey for ankit from 192.168.1.5 port 22",
+    "auth failed for user 'root' from 172.16.0.1",
+    "pam_unix(sshd:auth): authentication failure; logname= user=daemon",
+    "Failed password for invalid user oracle from 2001:db8::1 port 22",
+    "Brute-force then SUCCESSFUL login for 'operator' from fe80::1",
+    "connection from app-01.internal (10.1.1.1) and app-01",
+    "control\x07chars\x1bstripped " + "x" * 3000,
+]
+_REDACT_HOSTS = ["app-01.internal", "app-01"]
+_REDACT_USERS = ["operator", "ankit"]
+
+
+def test_vendored_masks_by_default():
+    print("_redact_vendored — masks IPs and usernames (standalone-safe)")
+    from itsoc_mcp import _redact_vendored as v
+    out = v.redact_text("Failed password for admin from 10.0.0.9")
+    check("IP masked", "10.0.0.9" not in out and "[IP-1]" in out)
+    check("user masked", "admin" not in out and "[USER-1]" in out)
+    # Shared scope keeps one value one placeholder.
+    r = v.Redactor()
+    a, b = r.redact("from 10.0.0.9"), r.redact("again 10.0.0.9")
+    check("consistent placeholder in a scope", "[IP-1]" in a and "[IP-1]" in b)
+
+
+def test_redact_source_is_console_in_repo():
+    print("redaction.redact_source — single source of truth when in-repo")
+    check("active source is console.redact in-repo",
+          redaction.redact_source() == "console.redact")
+
+
+def test_drift_guard_vendored_matches_console():
+    print("DRIFT-GUARD — vendored masking is byte-identical to console/redact.py")
+    try:
+        from console import redact as canonical
+    except ImportError:
+        skip("drift-guard", "console/redact.py not importable (standalone) — "
+                            "vendored copy is the single source by definition")
+        return
+    from itsoc_mcp import _redact_vendored as vendored
+
+    # 1) redact_text on each corpus line, with known hosts/users.
+    identical = True
+    for s in _REDACT_CORPUS:
+        a = canonical.redact_text(s, hosts=_REDACT_HOSTS, users=_REDACT_USERS)
+        b = vendored.redact_text(s, hosts=_REDACT_HOSTS, users=_REDACT_USERS)
+        if a != b:
+            identical = False
+            print(f"    DIVERGENCE on {s!r}:\n      console:  {a!r}\n      vendored: {b!r}")
+    check("redact_text identical across corpus", identical)
+
+    # 2) shared-scope batch (whole corpus in one Redactor) identical too.
+    ca = [canonical.Redactor(hosts=_REDACT_HOSTS, users=_REDACT_USERS).redact(s) for s in _REDACT_CORPUS]
+    cb = [vendored.Redactor(hosts=_REDACT_HOSTS, users=_REDACT_USERS).redact(s) for s in _REDACT_CORPUS]
+    check("Redactor scope identical across corpus", ca == cb)
+
+    # 3) module-level redact_lines returns the same masked lines.
+    la, _ = canonical.redact_lines(_REDACT_CORPUS, hosts=_REDACT_HOSTS, users=_REDACT_USERS)
+    lb, _ = vendored.redact_lines(_REDACT_CORPUS, hosts=_REDACT_HOSTS, users=_REDACT_USERS)
+    check("redact_lines identical across corpus", la == lb)
+
+
+def test_ti_unavailable_fails_closed():
+    print("threat_intel_lookup — standalone (no threat_intel/) FAILS CLOSED")
+    _real_avail = tio.threat_intel_available
+    tools.tio.threat_intel_available = lambda: False
+    try:
+        c = FakeClient(state=_good_state())
+        # No bundle configured — must NOT be the soft 'n/a', it must fail closed.
+        r = tools.threat_intel_lookup(c, "198.51.100.7")
+        check("ok=False (fail closed)", r.get("ok") is False)
+        check("honest unavailable message", "unavailable" in r.get("error", "").lower())
+        check("explicitly not an all-clear", "all-clear" in r.get("error", "").lower())
+        check("no fabricated matches", "matches" not in r and r.get("matched") is not True)
+        # Even WITH a bundle path, standalone still fails closed (never a fake match).
+        r2 = tools.threat_intel_lookup(c, "198.51.100.7", bundle_path="/tmp/whatever.json")
+        check("bundle-set still fails closed", r2.get("ok") is False
+              and "unavailable" in r2.get("error", "").lower())
+    finally:
+        tools.tio.threat_intel_available = _real_avail
+
+
 def main():
     print("\n=== itsoc_mcp smoke tests — all 7 tools, network-free ===\n")
     _no_trusted()
@@ -476,6 +571,11 @@ def main():
         test_ti_invalid_ip()
         test_ti_match(tmpdir, True)
         test_ti_no_match(tmpdir, True)
+        test_ti_unavailable_fails_closed()
+        # Standalone redaction: vendored mirror + drift-guard + active source.
+        test_vendored_masks_by_default()
+        test_redact_source_is_console_in_repo()
+        test_drift_guard_vendored_matches_console()
     finally:
         tools.tio.build_mapper = _real_build_mapper
         tmp.unlink(missing_ok=True)
@@ -484,7 +584,8 @@ def main():
         tmpdir.rmdir()
         _no_trusted()
 
-    print(f"\n{_PASS} passed, {_FAIL} failed\n")
+    tail = f", {_SKIP} skipped" if _SKIP else ""
+    print(f"\n{_PASS} passed, {_FAIL} failed{tail}\n")
     sys.exit(1 if _FAIL else 0)
 
 
