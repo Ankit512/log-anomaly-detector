@@ -143,9 +143,12 @@ def run_intake(input_path, out_dir, lines_per_chunk=25):
 
     # Deterministic pass only: rules, severities, correlation. rules_only
     # skips the model AND its preflight, so no network I/O happens at all.
+    # Safe-intake is the HONEST flow by contract: an unrecognized file must report
+    # "0 parsed — not an all-clear", never be force-parsed into a clean-looking report.
+    # (The interactive analyzer defaults to force; intake deliberately does not.)
     log_analyzer.run(str(path), str(prefix), lines_per_chunk,
                      model="(none — rules only)", base_url="(local — no model call)",
-                     api_key="", rules_only=True)
+                     api_key="", rules_only=True, unrecognized_mode="honest")
 
     report = json.loads(Path(f"{prefix}.json").read_text())
     state = export.state_from_report(f"{prefix}.json")

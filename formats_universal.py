@@ -44,7 +44,7 @@ from pathlib import Path
 
 import normalize  # native normalizer stays the first parser
 
-DEFAULT_MODE = os.environ.get("LOG_ANALYZER_UNRECOGNIZED_MODE", "honest").strip().lower()
+DEFAULT_MODE = os.environ.get("LOG_ANALYZER_UNRECOGNIZED_MODE", "force").strip().lower()
 STRUCTURED_FORMATS = {
     "evtx", "xml", "windows_event_text", "json", "jsonl", "csv", "html",
 }
@@ -627,6 +627,9 @@ def load_log_file(path: Path, mode: str = None):
     # 4. Genuinely unrecognized text — behaviour depends on mode.
     if mode == "force":
         recs, st = parse_text_stream(path, encoding)
+        # Honesty: a force-parsed unrecognized file must NOT read as an all-clear.
+        # This flag makes the analyzer surface a "format not recognized" caution.
+        st["forced_unrecognized"] = True
         return _adapt_all(recs), st
 
     # MODE A honest-unrecognized: keep the native 0-parsed "unknown" stats.

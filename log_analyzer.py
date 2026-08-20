@@ -670,6 +670,10 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
     if stats["unparsed"]:
         for raw in stats["unparsed_examples"][:3]:
             print(f"    unparsed: {raw[:88]}")
+    if stats.get("forced_unrecognized"):
+        print("WARNING: FORMAT NOT RECOGNIZED — parsed as generic text (force default). "
+              "0 findings here is NOT an all-clear; re-run with --unrecognized-mode honest "
+              "to refuse unreadable input instead.")
 
     extra_anomalies = []
     if stats["format"] == "rfc3164":
@@ -934,6 +938,8 @@ def run(input_path: str, output_prefix: str, lines_per_chunk: int, model: str,
         "endpoint": base_url,
         "temperature": LLM_TEMPERATURE,
         "ruleset": RULESET_VERSION,
+        "format": stats["format"],
+        "forced_unrecognized": bool(stats.get("forced_unrecognized")),
         "lines_parsed": stats["parsed"],
         "lines_unparsed": stats["unparsed"],
         "input_sha256": file_sha256(path),
@@ -988,6 +994,10 @@ def write_markdown_report(report: dict, path: str):
 
     lines = []
     lines.append(f"# Log Analysis Report\n")
+    if report.get("forced_unrecognized"):
+        lines.append("> **⚠ FORMAT NOT RECOGNIZED — parsed as generic text (force mode).** "
+                     "0 findings is **NOT an all-clear**: the tool could not interpret this "
+                     "file's format and read it line-by-line as plain text.\n")
     lines.append(f"**Source:** `{report['source_file']}`  ")
     lines.append(f"**Generated:** {report['generated_at']}  ")
     lines.append(f"**Model:** {report.get('model', 'n/a')}  ")
@@ -1068,12 +1078,13 @@ if __name__ == "__main__":
                              "rule finding. Finds sub-threshold notes anywhere in the "
                              "file; cost then scales with file size, not findings.")
     parser.add_argument("--unrecognized-mode", choices=("honest", "force"), default=None,
-                        help="How to handle a GENUINELY-unrecognized input. 'honest' "
-                             "(default; also $LOG_ANALYZER_UNRECOGNIZED_MODE) reports "
-                             "'format not recognized — NOT an all-clear' and runs no "
-                             "detector on synthetic records. 'force' parses everything as "
-                             "generic text and runs the detector on it (never fabricates "
-                             "severity). Structured formats parse the same way either way.")
+                        help="How to handle a GENUINELY-unrecognized input. 'force' "
+                             "(default; also $LOG_ANALYZER_UNRECOGNIZED_MODE) parses "
+                             "everything as generic text and runs the detector on it "
+                             "(never fabricates severity; the report carries a 'format not "
+                             "recognized — NOT an all-clear' caution). 'honest' instead "
+                             "refuses unreadable input: 0 lines parsed, no detector on "
+                             "synthetic records. Structured formats parse the same way either way.")
     args = parser.parse_args()
 
     run(args.input, args.output, args.lines_per_chunk, args.model, args.base_url, LLM_API_KEY,
