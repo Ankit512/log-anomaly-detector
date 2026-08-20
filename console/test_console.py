@@ -3164,6 +3164,70 @@ def check_evtx():
     return 0 if all(results) else 1
 
 
+def check_validate_real():
+    """Real-log validation harness (tests/eval/validate_real.py).
+
+    The harness runs the FROZEN deterministic path and SCORES it against a
+    hand-labeled ground-truth file; it computes no verdicts of its own. Checks:
+    the synthetic self-test proves FP/FN/severity-mismatch rendering; the filled
+    example (a verbatim slice of samples/Linux_2k.log) scores exactly against its
+    labels; an unrecognized format yields an honest 0-parsed banner + n/a
+    precision (never a fake all-clear); and the frozen detector sha is unchanged.
+    """
+    import hashlib
+    ROOT = HERE.parent
+    EVAL = ROOT / "tests" / "eval"
+    sys.path.insert(0, str(EVAL))
+    sys.path.insert(0, str(ROOT))
+    import validate_real as vr
+
+    results = []
+
+    def check(label, cond, detail=""):
+        results.append(cond)
+        print(f"  [{'PASS' if cond else 'FAIL'}] {label}" + ("" if cond or not detail else f" — {detail}"))
+
+    print("\nReal-log validation harness (tests/eval/validate_real.py):")
+
+    # Frozen detector must be untouched — the harness measures IT, never edits it.
+    sha = hashlib.sha256((ROOT / "anomaly_detector.py").read_bytes()).hexdigest()
+    check("frozen anomaly_detector.py sha256 unchanged",
+          sha == "43f0560f2a81d52a9b8909d4c0f3a537ef2059b343ea48acc7dba59b38312d05", sha)
+
+    # Self-test proves the scorer + FP/FN/severity rendering on synthetic data.
+    check("--selftest passes (FP/FN/severity/n-a paths)", vr.selftest() == 0)
+
+    # Filled example: a real slice scored against hand labels.
+    log = EVAL / "fixtures" / "Linux_bruteforce_slice.log"
+    labels_path = EVAL / "labels" / "Linux_bruteforce_slice.labels.json"
+    labels_obj, labels = vr._load_labels(str(labels_path))
+    findings, meta = vr.analyze(str(log))
+    sc = vr.score(findings, labels)
+    check("filled example: 3 TP, 0 FP, 0 FN",
+          sc["tp"] == 3 and sc["fp"] == 0 and sc["fn"] == 0,
+          str((sc["tp"], sc["fp"], sc["fn"])))
+    check("filled example: precision/recall/F1 = 1.0",
+          sc["precision"] == 1.0 and sc["recall"] == 1.0 and sc["f1"] == 1.0)
+    check("parse coverage is honest (rfc3164, 250/250 parsed)",
+          meta["format"] == "rfc3164" and meta["parsed"] == 250 and meta["unparsed"] == 0)
+    check("severity is rule-owned (findings carry the detector's own severity)",
+          all(f["severity"] in ("critical", "high", "medium", "low", "info") for f in findings))
+
+    # Honest unrecognized-format path: 0 parsed -> banner + precision n/a, never fake-green.
+    with tempfile.TemporaryDirectory(prefix="vr-test-") as tmp:
+        garbage = Path(tmp) / "garbage.log"
+        garbage.write_text("zzz not a log\n@@@ nonsense\n%%% junk\n")
+        gfind, gmeta = vr.analyze(str(garbage))
+        _, honest, unrec = vr.coverage_banner(gmeta)
+        gsc = vr.score(gfind, labels)
+        check("unrecognized format -> honest '0 lines parsed' banner",
+              gmeta["parsed"] == 0 and honest is not None and unrec == 100.0)
+        check("unrecognized format -> precision n/a (no fake all-clear)",
+              gsc["precision"] is None)
+
+    return 0 if all(results) else 1
+
+
 def main():
     node = shutil.which("node")
     if not node:
@@ -3215,14 +3279,15 @@ def main():
     discovery_ = check_discovery()
     ti_oem_ = check_ti_oem()
     evtx_ = check_evtx()
+    validate_ = check_validate_real()
     if (result.returncode or routing or log360 or logcat_ or remote or dashboard
             or layout or allruns or soc or subsystems or export_ or react or store_
-            or syslog_ or discovery_ or ti_oem_ or evtx_):
+            or syslog_ or discovery_ or ti_oem_ or evtx_ or validate_):
         print("\nFAILED")
         return 1
     print("\nPASSED — render + routing + log360 + logcat + remote-compute + dashboard-data "
           "+ layout + all-runs + soc-overview + soc-subsystems + export + serve-react + store "
-          "+ syslog + discovery + ti-oem + evtx checks green")
+          "+ syslog + discovery + ti-oem + evtx + validate-real checks green")
     return 0
 
 
