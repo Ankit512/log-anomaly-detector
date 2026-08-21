@@ -66,8 +66,9 @@ re-upload to PyPI, then `mcp-publisher publish` again.
 uvx itsoc-mcp        # or: pipx run itsoc-mcp   (the backend must still be running)
 ```
 
-> **Standalone, stated honestly:** the package is self-contained and runs from a
-> bare `uvx itsoc-mcp` install (verified in a clean out-of-repo venv). Two caveats:
+> **Standalone, stated honestly:** the package is *designed* to run self-contained
+> from a bare `uvx itsoc-mcp` install; the clean out-of-repo venv check is
+> **pending** (see the pre-publish checklist below). Two caveats:
 > (1) the **backend still runs separately** — `python3 console/serve.py`, reachable
 > at `ITSOC_BASE_URL`; "standalone" means no repo checkout for the *MCP package*,
 > not a backend-free server. (2) `threat_intel_lookup` reuses the repo's

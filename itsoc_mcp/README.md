@@ -116,7 +116,7 @@ that idle/unrecognized/error states return honest errors, not empty payloads.
 `pyproject.toml` builds an `itsoc-mcp` distribution with an `itsoc-mcp` console
 script (`itsoc_mcp.server:main`) and pins `mcp>=1.0,<2` — MCP clients speak the
 stable 1.x API; mcp 2.0 changed the server API. The package is **self-contained**:
-it runs with no repo checkout.
+designed to run with no repo checkout.
 
 ```sh
 uvx itsoc-mcp        # or: pipx run itsoc-mcp   (the backend must still be running)
